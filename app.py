@@ -4,76 +4,35 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-SOFASCORE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json",
-    "Referer": "https://www.sofascore.com/",
-    "Origin": "https://www.sofascore.com"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 }
 
-# Mundial 2026 en SofaScore: tournament 16, season a buscar
-TOURNAMENT_ID = 16
+# Openfootball - archivo JSON publico en GitHub, sin bloqueos
+OPENFOOTBALL_URL = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
 
-def get_season_id():
-    try:
-        r = requests.get(
-            f"https://api.sofascore.com/api/v1/unique-tournament/{TOURNAMENT_ID}/seasons",
-            headers=SOFASCORE_HEADERS, timeout=10
-        )
-        seasons = r.json().get("seasons", [])
-        # Buscar temporada 2026
-        for s in seasons:
-            if "2026" in str(s.get("year", "")) or "2026" in str(s.get("name", "")):
-                return s["id"]
-        return seasons[0]["id"] if seasons else None
-    except Exception as e:
-        print(f"Error getting season: {e}")
-        return None
+NAME_MAP = {
+    "Mexico":"México","South Africa":"Sudáfrica","South Korea":"Corea del Sur",
+    "Czech Republic":"Chequia","Canada":"Canadá","Switzerland":"Suiza",
+    "Bosnia-Herzegovina":"Bosnia y Herzegovina","United States":"Estados Unidos",
+    "Australia":"Australia","Turkey":"Turquía","Haiti":"Haití","Scotland":"Escocia",
+    "Brazil":"Brasil","Morocco":"Marruecos","Netherlands":"Países Bajos","Japan":"Japón",
+    "Tunisia":"Túnez","Sweden":"Suecia","Belgium":"Bélgica","Egypt":"Egipto",
+    "Iran":"Irán","New Zealand":"Nueva Zelanda","Spain":"España","Cape Verde":"Cabo Verde",
+    "Saudi Arabia":"Arabia Saudita","Uruguay":"Uruguay","France":"Francia",
+    "Senegal":"Senegal","Norway":"Noruega","Iraq":"Irak","Argentina":"Argentina",
+    "Algeria":"Argelia","Austria":"Austria","Jordan":"Jordania","Portugal":"Portugal",
+    "Uzbekistan":"Uzbekistán","Colombia":"Colombia","DR Congo":"RD Congo",
+    "England":"Inglaterra","Croatia":"Croacia","Ghana":"Ghana","Panama":"Panamá",
+    "Germany":"Alemania","Curacao":"Curazao","Ecuador":"Ecuador",
+    "Ivory Coast":"Costa de Marfil","Paraguay":"Paraguay","Qatar":"Qatar"
+}
 
-def get_top_scorers(season_id):
-    try:
-        r = requests.get(
-            f"https://api.sofascore.com/api/v1/unique-tournament/{TOURNAMENT_ID}/season/{season_id}/top-players/scoring",
-            headers=SOFASCORE_HEADERS, timeout=10
-        )
-        players = r.json().get("topPlayers", [])
-        return [
-            {
-                "jugador": p.get("player", {}).get("name", ""),
-                "seleccion": p.get("team", {}).get("name", ""),
-                "total": p.get("statistics", {}).get("goals", 0)
-            }
-            for p in players[:15]
-        ]
-    except Exception as e:
-        print(f"Error scorers: {e}")
-        return []
-
-def get_results(season_id):
-    try:
-        r = requests.get(
-            f"https://api.sofascore.com/api/v1/unique-tournament/{TOURNAMENT_ID}/season/{season_id}/events/last/0",
-            headers=SOFASCORE_HEADERS, timeout=10
-        )
-        events = r.json().get("events", [])
-        results = []
-        for e in events:
-            if e.get("status", {}).get("type") != "finished":
-                continue
-            results.append({
-                "home": e.get("homeTeam", {}).get("name", ""),
-                "away": e.get("awayTeam", {}).get("name", ""),
-                "homeScore": e.get("homeScore", {}).get("current", ""),
-                "awayScore": e.get("awayScore", {}).get("current", "")
-            })
-        return results
-    except Exception as e:
-        print(f"Error results: {e}")
-        return []
+def es(name):
+    return NAME_MAP.get(name, name)
 
 @app.route("/stats")
 def stats():
-    season_id = get_season_id()
     result = {
         "goals": [],
         "assists": [],
@@ -82,13 +41,56 @@ def stats():
         "cleanSheets": [],
         "saves": [],
         "scores": [],
-        "seasonId": season_id,
         "updated": datetime.utcnow().isoformat() + "Z"
     }
 
-    if season_id:
-        result["goals"] = get_top_scorers(season_id)
-        result["scores"] = get_results(season_id)
+    try:
+        r = requests.get(OPENFOOTBALL_URL, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+
+        scorers = {}
+        scores = []
+
+        for m in data.get("matches", []):
+            if not m.get("score") or not m["score"].get("ft"):
+                continue
+
+            ga, gb = m["score"]["ft"]
+            team_a = es(m.get("team1", ""))
+            team_b = es(m.get("team2", ""))
+
+            scores.append({
+                "home": team_a,
+                "away": team_b,
+                "homeScore": ga,
+                "awayScore": gb
+            })
+
+            # Contar goles por jugador
+            for g in m.get("goals1", []):
+                name = g.get("name", "")
+                if not name:
+                    continue
+                key = f"{name}|{team_a}"
+                if key not in scorers:
+                    scorers[key] = {"jugador": name, "seleccion": team_a, "total": 0}
+                scorers[key]["total"] += 1
+
+            for g in m.get("goals2", []):
+                name = g.get("name", "")
+                if not name:
+                    continue
+                key = f"{name}|{team_b}"
+                if key not in scorers:
+                    scorers[key] = {"jugador": name, "seleccion": team_b, "total": 0}
+                scorers[key]["total"] += 1
+
+        result["goals"] = sorted(scorers.values(), key=lambda x: -x["total"])[:15]
+        result["scores"] = scores
+
+    except Exception as e:
+        print(f"Error: {e}")
 
     response = jsonify(result)
     response.headers["Access-Control-Allow-Origin"] = "*"
