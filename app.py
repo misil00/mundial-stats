@@ -1,13 +1,11 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 import requests
 from datetime import datetime
 from bs4 import BeautifulSoup
-import re
 
 app = Flask(__name__)
 
 SCRAPER_KEY = "95382bf00c8f549468a92828c1428f3f"
-SCRAPER_URL = "https://api.scraperapi.com"
 OF_URL = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
 
 NAME_MAP = {
@@ -33,11 +31,15 @@ def es(name):
 
 def scrape(url):
     try:
-        r = requests.get(SCRAPER_URL, params={"api_key": SCRAPER_KEY, "url": url, "render": "true"}, timeout=30)
+        r = requests.get(
+            "https://api.scraperapi.com",
+            params={"api_key": SCRAPER_KEY, "url": url, "render": "true"},
+            timeout=30
+        )
         r.raise_for_status()
         return r.text
     except Exception as e:
-        print(f"ScraperAPI error: {e}")
+        print(f"ScraperAPI error {url}: {e}")
         return None
 
 def fetch_openfootball():
@@ -73,58 +75,62 @@ def fetch_openfootball():
         print(f"Error openfootball: {e}")
         return [], []
 
-def parse_marca(url):
+def parse_fichajes(stat):
+    """Scraping fichajes.com para tarjetas amarillas/rojas/asistencias"""
+    urls = {
+        "yellowCards": "https://www.fichajes.com/mundo/copa-mundial/estadistica-jugadores/tarjetas-amarillas",
+        "redCards": "https://www.fichajes.com/mundo/copa-mundial/estadistica-jugadores/tarjetas-rojas",
+        "assists": "https://www.fichajes.com/mundo/copa-mundial/estadistica-jugadores/asistencias",
+    }
+    url = urls.get(stat)
+    if not url:
+        return []
     html = scrape(url)
     if not html:
         return []
-    soup = BeautifulSoup(html, "html.parser")
-    results = []
-    
-    # Buscar todas las filas con datos de jugadores
-    # Marca usa diferentes estructuras - buscar por texto
-    rows = soup.find_all("tr")
-    print(f"Filas encontradas en {url}: {len(rows)}")
-    
-    for row in rows:
-        cells = row.find_all(["td","th"])
-        if len(cells) < 3:
-            continue
-        texts = [c.get_text(separator=" ", strip=True) for c in cells]
-        
-        # Skip headers
-        if any(t.lower() in ["jugador","equipo","player","team","pos"] for t in texts[:3]):
-            continue
-            
-        # Buscar nombre y equipo
-        jugador = ""
-        seleccion = ""
-        total = 0
-        
-        for i, t in enumerate(texts):
-            if t and not t.isdigit() and len(t) > 2 and not jugador:
-                if not any(c.isdigit() for c in t) or len(t) > 10:
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        results = []
+        # fichajes.com usa tabla con clase específica
+        rows = soup.select("tr")
+        for row in rows:
+            cells = row.find_all(["td", "th"])
+            if len(cells) < 3:
+                continue
+            texts = [c.get_text(strip=True) for c in cells]
+            # Buscar nombre de jugador y selección
+            jugador = ""
+            seleccion = ""
+            total = 0
+            for i, t in enumerate(texts):
+                if not t or t.isdigit():
+                    continue
+                if len(t) > 2 and not jugador and not any(c.isdigit() for c in t):
                     jugador = t
-            elif jugador and not t.isdigit() and len(t) > 2 and not seleccion:
-                seleccion = t
-            elif t.isdigit() and jugador and seleccion and not total:
-                total = int(t)
-        
-        if jugador and seleccion and total > 0:
-            results.append({"jugador": jugador, "seleccion": es(seleccion), "total": total})
-    
-    return results[:15]
+                elif jugador and len(t) > 2 and not seleccion and not any(c.isdigit() for c in t):
+                    seleccion = t
+            nums = [t for t in texts if t.isdigit()]
+            if nums:
+                total = int(nums[0])
+            if jugador and seleccion and total > 0:
+                results.append({"jugador": jugador, "seleccion": es(seleccion), "total": total})
+        return results[:15]
+    except Exception as e:
+        print(f"Parse error {stat}: {e}")
+        return []
 
 @app.route("/stats")
 def stats():
     goals, scores = fetch_openfootball()
-    yellow = parse_marca("https://us.marca.com/soccer/mundial/tarjetas.html")
-    assists = parse_marca("https://us.marca.com/soccer/mundial/asistencias.html")
+    yellow = parse_fichajes("yellowCards")
+    red = parse_fichajes("redCards")
+    assists = parse_fichajes("assists")
 
     result = {
         "goals": goals,
         "assists": assists,
         "yellowCards": yellow,
-        "redCards": [],
+        "redCards": red,
         "cleanSheets": [],
         "saves": [],
         "scores": scores,
@@ -136,20 +142,18 @@ def stats():
 
 @app.route("/debug")
 def debug():
-    url = request.args.get("url", "https://us.marca.com/soccer/mundial/tarjetas.html")
+    url = "https://www.fichajes.com/mundo/copa-mundial/estadistica-jugadores/tarjetas-amarillas"
     html = scrape(url)
     if not html:
         return "ScraperAPI failed"
     soup = BeautifulSoup(html, "html.parser")
-    tables = soup.find_all("table")
-    rows = soup.find_all("tr")
-    # Mostrar primeras filas con contenido
+    rows = soup.select("tr")
     sample = []
-    for row in rows[:20]:
+    for row in rows[:15]:
         cells = [c.get_text(strip=True) for c in row.find_all(["td","th"])]
         if cells:
             sample.append(str(cells))
-    return f"Tables: {len(tables)} | Rows: {len(rows)} | HTML: {len(html)}<br><br>" + "<br>".join(sample)
+    return f"Rows: {len(rows)} | HTML: {len(html)}<br><br>" + "<br>".join(sample)
 
 @app.route("/")
 def index():
