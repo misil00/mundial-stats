@@ -11,13 +11,9 @@ HEADERS = {
 }
 
 OF_URL = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
+DEPLOY_HOOK = "https://api.render.com/deploy/srv-d8mn42m7r5hc73a0cs20?key=kJ1QEv1G3Qw"
 
-# APIs internas de Marca/Unidad Editorial
 MARCA_BASE = "https://api.unidadeditorial.es/sports/v1/player-total-rank/sport/01/tournament/0117/season/2025"
-MARCA_CARDS  = f"{MARCA_BASE}/sort/cards?site=2&mn=50"
-MARCA_GOALS  = f"{MARCA_BASE}/sort/goals?site=2&mn=50"
-MARCA_ASSISTS = f"{MARCA_BASE}/sort/assists?site=2&mn=50"
-MARCA_SAVES  = f"{MARCA_BASE}/sort/saves?site=2&mn=50"
 
 NAME_MAP = {
     "Mexico":"México","South Africa":"Sudáfrica","South Korea":"Corea del Sur",
@@ -36,28 +32,21 @@ NAME_MAP = {
     "Germany":"Alemania","Curacao":"Curazao","Ecuador":"Ecuador",
     "Ivory Coast":"Costa de Marfil","Paraguay":"Paraguay","Qatar":"Qatar",
     "República Checa":"Chequia","Bosnia Herzegovina":"Bosnia y Herzegovina",
-    "Estados Unidos":"Estados Unidos","Corea del Sur":"Corea del Sur"
 }
 
 def es(name):
     return NAME_MAP.get(name, name)
 
-def fetch_marca(url, value_key):
+def fetch_marca_rank(sort_by):
+    """Fetch ranking from Marca internal API"""
     try:
+        url = f"{MARCA_BASE}/sort/{sort_by}?site=2&mn=50"
         r = requests.get(url, headers=HEADERS, timeout=10)
         r.raise_for_status()
         data = r.json()
-        players = data.get("data", data.get("players", data.get("items", [])))
-        result = []
-        for p in players:
-            name = p.get("playerName") or p.get("name") or p.get("player", {}).get("name", "")
-            team = p.get("teamName") or p.get("team") or p.get("competitorName", "")
-            value = p.get(value_key) or p.get("value") or p.get("total", 0)
-            if name:
-                result.append({"jugador": name, "seleccion": es(team), "total": int(value or 0)})
-        return result[:15]
+        return data.get("data", {}).get("rank", [])
     except Exception as e:
-        print(f"Error Marca {url}: {e}")
+        print(f"Error Marca {sort_by}: {e}")
         return []
 
 def fetch_openfootball():
@@ -96,22 +85,55 @@ def fetch_openfootball():
 @app.route("/stats")
 def stats():
     goals_of, scores = fetch_openfootball()
-    
-    # Intentar API de Marca para estadísticas
-    cards_data = fetch_marca(MARCA_CARDS, "yellowCards")
-    goals_marca = fetch_marca(MARCA_GOALS, "goals")
-    assists = fetch_marca(MARCA_ASSISTS, "assists")
-    saves = fetch_marca(MARCA_SAVES, "saves")
-    
-    # Separar amarillas y rojas de cards_data
+
+    # Tarjetas desde Marca
+    cards_rank = fetch_marca_rank("cards")
     yellow = []
     red = []
-    for p in cards_data:
-        # La API de tarjetas tiene TA y TR
-        if p.get("total", 0) > 0:
-            yellow.append(p)
+    for p in cards_rank:
+        name = p.get("knownName") or p.get("playerName", "")
+        team = es(p.get("teamName", ""))
+        yc = p.get("cards", 0) - p.get("redCards", 0)  # amarillas = total - rojas
+        rc = p.get("redCards", 0)
+        if yc > 0:
+            yellow.append({"jugador": name, "seleccion": team, "total": yc})
+        if rc > 0:
+            red.append({"jugador": name, "seleccion": team, "total": rc})
 
-    # Usar goles de Marca si hay, sino openfootball
+    # Goles desde Marca
+    goals_rank = fetch_marca_rank("goals")
+    goals_marca = []
+    for p in goals_rank:
+        name = p.get("knownName") or p.get("playerName", "")
+        team = es(p.get("teamName", ""))
+        total = p.get("goals", 0)
+        if name and total > 0:
+            goals_marca.append({"jugador": name, "seleccion": team, "total": total})
+
+    # Asistencias desde Marca
+    assists_rank = fetch_marca_rank("assists")
+    assists = []
+    for p in assists_rank:
+        name = p.get("knownName") or p.get("playerName", "")
+        team = es(p.get("teamName", ""))
+        total = p.get("assists", 0)
+        if name and total > 0:
+            assists.append({"jugador": name, "seleccion": team, "total": total})
+
+    # Porteros invictos desde Marca
+    saves_rank = fetch_marca_rank("saves")
+    saves = []
+    clean = []
+    for p in saves_rank:
+        name = p.get("knownName") or p.get("playerName", "")
+        team = es(p.get("teamName", ""))
+        sv = p.get("saves", 0)
+        gc = p.get("goalsConceded", 0)
+        if name and sv > 0:
+            saves.append({"jugador": name, "seleccion": team, "total": sv})
+        if name and gc == 0 and p.get("games", 0) > 0:
+            clean.append({"jugador": name, "seleccion": team, "total": p.get("games", 1)})
+
     goals = goals_marca if goals_marca else goals_of
 
     result = {
@@ -119,7 +141,7 @@ def stats():
         "assists": assists,
         "yellowCards": yellow,
         "redCards": red,
-        "cleanSheets": [],
+        "cleanSheets": clean,
         "saves": saves,
         "scores": scores,
         "updated": datetime.utcnow().isoformat() + "Z"
@@ -131,9 +153,8 @@ def stats():
 
 @app.route("/debug")
 def debug():
-    """Ver respuesta cruda de la API de Marca"""
     try:
-        r = requests.get(MARCA_CARDS, headers=HEADERS, timeout=10)
+        r = requests.get(f"{MARCA_BASE}/sort/cards?site=2&mn=50", headers=HEADERS, timeout=10)
         return f"Status: {r.status_code}<br>Data: {r.text[:2000]}"
     except Exception as e:
         return f"Error: {e}"
