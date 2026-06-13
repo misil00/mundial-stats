@@ -1,12 +1,23 @@
 from flask import Flask, jsonify
 import requests
 from datetime import datetime
-from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
-SCRAPER_KEY = "95382bf00c8f549468a92828c1428f3f"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/json",
+    "Referer": "https://us.marca.com/"
+}
+
 OF_URL = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
+
+# APIs internas de Marca/Unidad Editorial
+MARCA_BASE = "https://api.unidadeditorial.es/sports/v1/player-total-rank/sport/01/tournament/0117/season/2025"
+MARCA_CARDS  = f"{MARCA_BASE}/sort/cards?site=2&mn=50"
+MARCA_GOALS  = f"{MARCA_BASE}/sort/goals?site=2&mn=50"
+MARCA_ASSISTS = f"{MARCA_BASE}/sort/assists?site=2&mn=50"
+MARCA_SAVES  = f"{MARCA_BASE}/sort/saves?site=2&mn=50"
 
 NAME_MAP = {
     "Mexico":"México","South Africa":"Sudáfrica","South Korea":"Corea del Sur",
@@ -23,24 +34,31 @@ NAME_MAP = {
     "Uzbekistan":"Uzbekistán","Colombia":"Colombia","DR Congo":"RD Congo",
     "England":"Inglaterra","Croatia":"Croacia","Ghana":"Ghana","Panama":"Panamá",
     "Germany":"Alemania","Curacao":"Curazao","Ecuador":"Ecuador",
-    "Ivory Coast":"Costa de Marfil","Paraguay":"Paraguay","Qatar":"Qatar"
+    "Ivory Coast":"Costa de Marfil","Paraguay":"Paraguay","Qatar":"Qatar",
+    "República Checa":"Chequia","Bosnia Herzegovina":"Bosnia y Herzegovina",
+    "Estados Unidos":"Estados Unidos","Corea del Sur":"Corea del Sur"
 }
 
 def es(name):
     return NAME_MAP.get(name, name)
 
-def scrape(url):
+def fetch_marca(url, value_key):
     try:
-        r = requests.get(
-            "https://api.scraperapi.com",
-            params={"api_key": SCRAPER_KEY, "url": url, "render": "true"},
-            timeout=30
-        )
+        r = requests.get(url, headers=HEADERS, timeout=10)
         r.raise_for_status()
-        return r.text
+        data = r.json()
+        players = data.get("data", data.get("players", data.get("items", [])))
+        result = []
+        for p in players:
+            name = p.get("playerName") or p.get("name") or p.get("player", {}).get("name", "")
+            team = p.get("teamName") or p.get("team") or p.get("competitorName", "")
+            value = p.get(value_key) or p.get("value") or p.get("total", 0)
+            if name:
+                result.append({"jugador": name, "seleccion": es(team), "total": int(value or 0)})
+        return result[:15]
     except Exception as e:
-        print(f"ScraperAPI error {url}: {e}")
-        return None
+        print(f"Error Marca {url}: {e}")
+        return []
 
 def fetch_openfootball():
     try:
@@ -75,56 +93,26 @@ def fetch_openfootball():
         print(f"Error openfootball: {e}")
         return [], []
 
-def parse_fichajes(stat):
-    """Scraping fichajes.com para tarjetas amarillas/rojas/asistencias"""
-    urls = {
-        "yellowCards": "https://www.fichajes.com/mundo/copa-mundial/estadistica-jugadores/tarjetas-amarillas",
-        "redCards": "https://www.fichajes.com/mundo/copa-mundial/estadistica-jugadores/tarjetas-rojas",
-        "assists": "https://www.fichajes.com/mundo/copa-mundial/estadistica-jugadores/asistencias",
-    }
-    url = urls.get(stat)
-    if not url:
-        return []
-    html = scrape(url)
-    if not html:
-        return []
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-        results = []
-        # fichajes.com usa tabla con clase específica
-        rows = soup.select("tr")
-        for row in rows:
-            cells = row.find_all(["td", "th"])
-            if len(cells) < 3:
-                continue
-            texts = [c.get_text(strip=True) for c in cells]
-            # Buscar nombre de jugador y selección
-            jugador = ""
-            seleccion = ""
-            total = 0
-            for i, t in enumerate(texts):
-                if not t or t.isdigit():
-                    continue
-                if len(t) > 2 and not jugador and not any(c.isdigit() for c in t):
-                    jugador = t
-                elif jugador and len(t) > 2 and not seleccion and not any(c.isdigit() for c in t):
-                    seleccion = t
-            nums = [t for t in texts if t.isdigit()]
-            if nums:
-                total = int(nums[0])
-            if jugador and seleccion and total > 0:
-                results.append({"jugador": jugador, "seleccion": es(seleccion), "total": total})
-        return results[:15]
-    except Exception as e:
-        print(f"Parse error {stat}: {e}")
-        return []
-
 @app.route("/stats")
 def stats():
-    goals, scores = fetch_openfootball()
-    yellow = parse_fichajes("yellowCards")
-    red = parse_fichajes("redCards")
-    assists = parse_fichajes("assists")
+    goals_of, scores = fetch_openfootball()
+    
+    # Intentar API de Marca para estadísticas
+    cards_data = fetch_marca(MARCA_CARDS, "yellowCards")
+    goals_marca = fetch_marca(MARCA_GOALS, "goals")
+    assists = fetch_marca(MARCA_ASSISTS, "assists")
+    saves = fetch_marca(MARCA_SAVES, "saves")
+    
+    # Separar amarillas y rojas de cards_data
+    yellow = []
+    red = []
+    for p in cards_data:
+        # La API de tarjetas tiene TA y TR
+        if p.get("total", 0) > 0:
+            yellow.append(p)
+
+    # Usar goles de Marca si hay, sino openfootball
+    goals = goals_marca if goals_marca else goals_of
 
     result = {
         "goals": goals,
@@ -132,28 +120,23 @@ def stats():
         "yellowCards": yellow,
         "redCards": red,
         "cleanSheets": [],
-        "saves": [],
+        "saves": saves,
         "scores": scores,
         "updated": datetime.utcnow().isoformat() + "Z"
     }
+
     response = jsonify(result)
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response
 
 @app.route("/debug")
 def debug():
-    url = "https://www.fichajes.com/mundo/copa-mundial/estadistica-jugadores/tarjetas-amarillas"
-    html = scrape(url)
-    if not html:
-        return "ScraperAPI failed"
-    soup = BeautifulSoup(html, "html.parser")
-    rows = soup.select("tr")
-    sample = []
-    for row in rows[:15]:
-        cells = [c.get_text(strip=True) for c in row.find_all(["td","th"])]
-        if cells:
-            sample.append(str(cells))
-    return f"Rows: {len(rows)} | HTML: {len(html)}<br><br>" + "<br>".join(sample)
+    """Ver respuesta cruda de la API de Marca"""
+    try:
+        r = requests.get(MARCA_CARDS, headers=HEADERS, timeout=10)
+        return f"Status: {r.status_code}<br>Data: {r.text[:2000]}"
+    except Exception as e:
+        return f"Error: {e}"
 
 @app.route("/")
 def index():
