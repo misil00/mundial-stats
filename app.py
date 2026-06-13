@@ -8,13 +8,13 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 }
 
-# Openfootball - archivo JSON publico en GitHub, sin bloqueos
 OPENFOOTBALL_URL = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
 
 NAME_MAP = {
     "Mexico":"México","South Africa":"Sudáfrica","South Korea":"Corea del Sur",
     "Czech Republic":"Chequia","Canada":"Canadá","Switzerland":"Suiza",
-    "Bosnia-Herzegovina":"Bosnia y Herzegovina","United States":"Estados Unidos",
+    "Bosnia-Herzegovina":"Bosnia y Herzegovina","Bosnia & Herzegovina":"Bosnia y Herzegovina",
+    "United States":"Estados Unidos","USA":"Estados Unidos",
     "Australia":"Australia","Turkey":"Turquía","Haiti":"Haití","Scotland":"Escocia",
     "Brazil":"Brasil","Morocco":"Marruecos","Netherlands":"Países Bajos","Japan":"Japón",
     "Tunisia":"Túnez","Sweden":"Suecia","Belgium":"Bélgica","Egypt":"Egipto",
@@ -25,7 +25,8 @@ NAME_MAP = {
     "Uzbekistan":"Uzbekistán","Colombia":"Colombia","DR Congo":"RD Congo",
     "England":"Inglaterra","Croatia":"Croacia","Ghana":"Ghana","Panama":"Panamá",
     "Germany":"Alemania","Curacao":"Curazao","Ecuador":"Ecuador",
-    "Ivory Coast":"Costa de Marfil","Paraguay":"Paraguay","Qatar":"Qatar"
+    "Ivory Coast":"Costa de Marfil","Paraguay":"Paraguay","Qatar":"Qatar",
+    "Curaçao":"Curazao","Côte d'Ivoire":"Costa de Marfil"
 }
 
 def es(name):
@@ -67,11 +68,9 @@ def stats():
                 "awayScore": gb
             })
 
-            # Contar goles por jugador
             for g in m.get("goals1", []):
                 name = g.get("name", "")
-                if not name:
-                    continue
+                if not name: continue
                 key = f"{name}|{team_a}"
                 if key not in scorers:
                     scorers[key] = {"jugador": name, "seleccion": team_a, "total": 0}
@@ -79,8 +78,7 @@ def stats():
 
             for g in m.get("goals2", []):
                 name = g.get("name", "")
-                if not name:
-                    continue
+                if not name: continue
                 key = f"{name}|{team_b}"
                 if key not in scorers:
                     scorers[key] = {"jugador": name, "seleccion": team_b, "total": 0}
