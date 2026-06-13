@@ -1,13 +1,13 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import requests
 from datetime import datetime
 from bs4 import BeautifulSoup
+import re
 
 app = Flask(__name__)
 
 SCRAPER_KEY = "95382bf00c8f549468a92828c1428f3f"
 SCRAPER_URL = "https://api.scraperapi.com"
-
 OF_URL = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
 
 NAME_MAP = {
@@ -25,21 +25,19 @@ NAME_MAP = {
     "Uzbekistan":"Uzbekistán","Colombia":"Colombia","DR Congo":"RD Congo",
     "England":"Inglaterra","Croatia":"Croacia","Ghana":"Ghana","Panama":"Panamá",
     "Germany":"Alemania","Curacao":"Curazao","Ecuador":"Ecuador",
-    "Ivory Coast":"Costa de Marfil","Paraguay":"Paraguay","Qatar":"Qatar",
-    "Curaçao":"Curazao","Côte d'Ivoire":"Costa de Marfil"
+    "Ivory Coast":"Costa de Marfil","Paraguay":"Paraguay","Qatar":"Qatar"
 }
 
 def es(name):
     return NAME_MAP.get(name, name)
 
 def scrape(url):
-    """Fetch any URL via ScraperAPI - bypasses all blocks"""
     try:
-        r = requests.get(SCRAPER_URL, params={"api_key": SCRAPER_KEY, "url": url}, timeout=30)
+        r = requests.get(SCRAPER_URL, params={"api_key": SCRAPER_KEY, "url": url, "render": "true"}, timeout=30)
         r.raise_for_status()
         return r.text
     except Exception as e:
-        print(f"ScraperAPI error for {url}: {e}")
+        print(f"ScraperAPI error: {e}")
         return None
 
 def fetch_openfootball():
@@ -70,94 +68,92 @@ def fetch_openfootball():
                 if key not in scorers:
                     scorers[key] = {"jugador": name, "seleccion": team_b, "total": 0}
                 scorers[key]["total"] += 1
-        goals = sorted(scorers.values(), key=lambda x: -x["total"])[:15]
-        return goals, scores
+        return sorted(scorers.values(), key=lambda x: -x["total"])[:15], scores
     except Exception as e:
         print(f"Error openfootball: {e}")
         return [], []
 
-def parse_marca_table(url, col_map):
-    """Parse a Marca stats table. col_map = {col_index: field_name}"""
+def parse_marca(url):
     html = scrape(url)
     if not html:
         return []
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-        results = []
-        # Buscar tabla de estadísticas
-        table = soup.find("table")
-        if not table:
-            # Buscar por clase
-            table = soup.find("div", class_=lambda x: x and "table" in x.lower())
-        if not table:
-            print(f"No table found in {url}")
-            return []
-        rows = table.find_all("tr")[1:]  # Skip header
-        for row in rows:
-            cells = row.find_all("td")
-            if len(cells) < 3:
-                continue
-            texts = [c.get_text(strip=True) for c in cells]
-            jugador = texts[1] if len(texts) > 1 else ""
-            seleccion = texts[2] if len(texts) > 2 else ""
-            if not jugador or jugador.isdigit():
-                continue
-            total = 0
-            for idx, field in col_map.items():
-                if idx < len(texts):
-                    try:
-                        total = int(texts[idx])
-                        break
-                    except:
-                        pass
-            if jugador and seleccion and total > 0:
-                results.append({
-                    "jugador": jugador,
-                    "seleccion": es(seleccion),
-                    "total": total
-                })
-        return results[:15]
-    except Exception as e:
-        print(f"Parse error {url}: {e}")
-        return []
+    soup = BeautifulSoup(html, "html.parser")
+    results = []
+    
+    # Buscar todas las filas con datos de jugadores
+    # Marca usa diferentes estructuras - buscar por texto
+    rows = soup.find_all("tr")
+    print(f"Filas encontradas en {url}: {len(rows)}")
+    
+    for row in rows:
+        cells = row.find_all(["td","th"])
+        if len(cells) < 3:
+            continue
+        texts = [c.get_text(separator=" ", strip=True) for c in cells]
+        
+        # Skip headers
+        if any(t.lower() in ["jugador","equipo","player","team","pos"] for t in texts[:3]):
+            continue
+            
+        # Buscar nombre y equipo
+        jugador = ""
+        seleccion = ""
+        total = 0
+        
+        for i, t in enumerate(texts):
+            if t and not t.isdigit() and len(t) > 2 and not jugador:
+                if not any(c.isdigit() for c in t) or len(t) > 10:
+                    jugador = t
+            elif jugador and not t.isdigit() and len(t) > 2 and not seleccion:
+                seleccion = t
+            elif t.isdigit() and jugador and seleccion and not total:
+                total = int(t)
+        
+        if jugador and seleccion and total > 0:
+            results.append({"jugador": jugador, "seleccion": es(seleccion), "total": total})
+    
+    return results[:15]
 
 @app.route("/stats")
 def stats():
     goals, scores = fetch_openfootball()
-
-    # Scraping Marca via ScraperAPI
-    yellow = parse_marca_table("https://us.marca.com/soccer/mundial/tarjetas.html", {3: "ta"})
-    red_raw = parse_marca_table("https://us.marca.com/soccer/mundial/tarjetas.html", {4: "tr"})
-    assists = parse_marca_table("https://us.marca.com/soccer/mundial/asistencias.html", {3: "ast"})
-    saves = parse_marca_table("https://us.marca.com/soccer/mundial/porteros.html", {3: "saves"})
+    yellow = parse_marca("https://us.marca.com/soccer/mundial/tarjetas.html")
+    assists = parse_marca("https://us.marca.com/soccer/mundial/asistencias.html")
 
     result = {
         "goals": goals,
         "assists": assists,
         "yellowCards": yellow,
-        "redCards": red_raw,
+        "redCards": [],
         "cleanSheets": [],
-        "saves": saves,
+        "saves": [],
         "scores": scores,
         "updated": datetime.utcnow().isoformat() + "Z"
     }
-
     response = jsonify(result)
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response
 
 @app.route("/debug")
 def debug():
-    html = scrape("https://us.marca.com/soccer/mundial/tarjetas.html")
+    url = request.args.get("url", "https://us.marca.com/soccer/mundial/tarjetas.html")
+    html = scrape(url)
     if not html:
         return "ScraperAPI failed"
     soup = BeautifulSoup(html, "html.parser")
     tables = soup.find_all("table")
-    return f"Tables found: {len(tables)} | HTML length: {len(html)} | Preview: {html[:500]}"
+    rows = soup.find_all("tr")
+    # Mostrar primeras filas con contenido
+    sample = []
+    for row in rows[:20]:
+        cells = [c.get_text(strip=True) for c in row.find_all(["td","th"])]
+        if cells:
+            sample.append(str(cells))
+    return f"Tables: {len(tables)} | Rows: {len(rows)} | HTML: {len(html)}<br><br>" + "<br>".join(sample)
 
 @app.route("/")
 def index():
-    return "Mundial 2026 Stats API OK - /stats /debug"
+    return "Mundial 2026 Stats API - /stats /debug"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
