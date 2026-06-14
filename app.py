@@ -141,6 +141,24 @@ def fetch_openfootball():
 def stats():
     goals_of = fetch_openfootball()
     scores = fetch_espn_scores()
+    # Auto-capturar partidos finalizados de hoy que no estén en cache
+    try:
+        for ev in scores:
+            if ev.get("status") in ["STATUS_FINAL","STATUS_FULL_TIME"]:
+                eid = ev.get("eventId")
+                if eid and not _cache["scores"].get(eid):
+                    edata = fetch_espn_event_full(eid)
+                    if edata and edata.get("teams_score"):
+                        _cache["lineups"][eid] = edata
+                        _cache["scores"][eid] = {}
+                        for t in edata["teams_score"]:
+                            _cache["scores"][eid][t["homeAway"]] = {
+                                "team": t["team"], "score": t["score"],
+                                "winner": t["winner"], "status": edata.get("status",""),
+                                "date": edata.get("date","")
+                            }
+    except:
+        pass
 
     # Tarjetas desde Marca
     cards_rank = fetch_marca_rank("cards")
