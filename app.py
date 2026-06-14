@@ -330,3 +330,138 @@ def debug_espn_lineup(event_id):
         return f"Status: {r.status_code}<br>Keys: {keys}<br>Rosters count: {len(rosters)}<br><pre>{json.dumps(rosters[:1] if rosters else boxscore, indent=2, ensure_ascii=False)[:3000]}</pre>"
     except Exception as e:
         return f"Error: {e}"
+
+
+# ── STATS POR PARTIDO (ESPN) ───────────────────────────────────────────────────
+@app.route("/match_stats")
+def match_stats():
+    """Estadísticas por partido del día vía ESPN boxscore"""
+    try:
+        r = requests.get(
+            "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
+            timeout=10
+        )
+        events = r.json().get("events", [])
+        result = []
+        for ev in events:
+            eid = ev.get("id")
+            ename = ev.get("name","")
+            sr = requests.get(
+                f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event={eid}",
+                timeout=10
+            )
+            if not sr.ok: continue
+            boxscore = sr.json().get("boxscore", {})
+            teams_data = []
+            for t in boxscore.get("teams", []):
+                team_name = ESPN_TEAM_NAME_MAP.get(t.get("team",{}).get("displayName",""), t.get("team",{}).get("displayName",""))
+                stats = {}
+                for s in t.get("statistics", []):
+                    stats[s["name"]] = s["displayValue"]
+                teams_data.append({"team": team_name, "stats": stats})
+            result.append({"eventId": eid, "name": ename, "teams": teams_data})
+        resp = jsonify(result)
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── RATING POR JUGADOR (Marca cruzado) ────────────────────────────────────────
+@app.route("/rating")
+def rating():
+    """Rating de jugadores basado en datos de Marca - estilo Sorare"""
+    try:
+        goals_rank   = fetch_marca_rank("goals")
+        assists_rank = fetch_marca_rank("assists")
+        cards_rank   = fetch_marca_rank("cards")
+        saves_rank   = fetch_marca_rank("saves")
+
+        players = {}
+
+        def get_or_create(name, team):
+            key = f"{name}|{team}"
+            if key not in players:
+                players[key] = {
+                    "jugador": name, "seleccion": team,
+                    "goles":0,"asistencias":0,"pases":0,
+                    "amarillas":0,"rojas":0,"atajadas":0,
+                    "porteria_invicta":0,"partidos":0
+                }
+            return players[key]
+
+        for p in goals_rank:
+            name = p.get("knownName") or p.get("playerName","")
+            team = es(p.get("teamName",""))
+            if not name: continue
+            pl = get_or_create(name, team)
+            pl["goles"] = p.get("goals",0)
+            pl["asistencias"] = p.get("assists",0)
+            pl["pases"] = p.get("successPasses",0)
+            pl["partidos"] = p.get("games",0)
+
+        for p in assists_rank:
+            name = p.get("knownName") or p.get("playerName","")
+            team = es(p.get("teamName",""))
+            if not name: continue
+            pl = get_or_create(name, team)
+            pl["asistencias"] = max(pl["asistencias"], p.get("assists",0))
+            pl["pases"] = max(pl["pases"], p.get("successPasses",0))
+            if not pl["partidos"]: pl["partidos"] = p.get("games",0)
+
+        for p in cards_rank:
+            name = p.get("knownName") or p.get("playerName","")
+            team = es(p.get("teamName",""))
+            if not name: continue
+            pl = get_or_create(name, team)
+            pl["amarillas"] = p.get("cards",0) - p.get("redCards",0)
+            pl["rojas"] = p.get("redCards",0)
+            if not pl["partidos"]: pl["partidos"] = p.get("games",0)
+
+        for p in saves_rank:
+            name = p.get("knownName") or p.get("playerName","")
+            team = es(p.get("teamName",""))
+            if not name: continue
+            pl = get_or_create(name, team)
+            pl["atajadas"] = p.get("saves",0)
+            gc = p.get("goalsConceded",0)
+            games = p.get("games",0)
+            pl["porteria_invicta"] = 1 if gc == 0 and games > 0 else 0
+            if not pl["partidos"]: pl["partidos"] = games
+
+        # Calcular rating estilo Sorare (base 35, escala 0-100)
+        rated = []
+        for key, pl in players.items():
+            base = 35
+            # Positivos
+            base += pl["goles"] * 15
+            base += pl["asistencias"] * 10
+            base += min(pl["pases"] * 0.05, 10)  # max 10 pts por pases
+            base += pl["atajadas"] * 2
+            base += pl["porteria_invicta"] * 10
+            # Negativos
+            base -= pl["amarillas"] * 3
+            base -= pl["rojas"] * 10
+            # Normalizar 0-100
+            rating_val = max(0, min(100, base))
+            # Solo mostrar si tiene alguna acción
+            if pl["goles"] or pl["asistencias"] or pl["atajadas"] or pl["porteria_invicta"]:
+                rated.append({
+                    "jugador": pl["jugador"],
+                    "seleccion": pl["seleccion"],
+                    "rating": round(rating_val, 1),
+                    "goles": pl["goles"],
+                    "asistencias": pl["asistencias"],
+                    "pases": pl["pases"],
+                    "amarillas": pl["amarillas"],
+                    "rojas": pl["rojas"],
+                    "atajadas": pl["atajadas"],
+                    "partidos": pl["partidos"]
+                })
+
+        rated.sort(key=lambda x: -x["rating"])
+        resp = jsonify(rated[:50])
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
