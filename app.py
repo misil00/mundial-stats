@@ -165,3 +165,52 @@ def index():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
+
+# ── BALLDONTLIE - Alineaciones ────────────────────────────────────────────────
+BDL_KEY = "58dc8429-9e2a-4ed9-9343-c036853ac116"
+BDL_HEADERS = {"Authorization": BDL_KEY}
+BDL_BASE = "https://api.balldontlie.io/fifa/worldcup/v1"
+
+@app.route("/lineups")
+def lineups():
+    """Alineaciones de todos los partidos jugados"""
+    try:
+        # Primero obtener los partidos
+        r = requests.get(f"{BDL_BASE}/matches", headers=BDL_HEADERS, timeout=10)
+        r.raise_for_status()
+        matches = r.json().get("data", [])
+        
+        result = []
+        for m in matches:
+            mid = m.get("id")
+            status = m.get("status","")
+            if status not in ["finished","live","in_progress"]:
+                continue
+            # Alineaciones del partido
+            lr = requests.get(f"{BDL_BASE}/match_lineups", 
+                             params={"match_ids[]": mid},
+                             headers=BDL_HEADERS, timeout=10)
+            if not lr.ok:
+                continue
+            result.append({
+                "match_id": mid,
+                "home": m.get("home_team",{}).get("name",""),
+                "away": m.get("away_team",{}).get("name",""),
+                "lineups": lr.json().get("data",[])
+            })
+        
+        response = jsonify(result)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/debug_bdl")
+def debug_bdl():
+    """Ver respuesta cruda de BallDontLie"""
+    try:
+        r = requests.get(f"{BDL_BASE}/matches", headers=BDL_HEADERS, timeout=10)
+        return f"Status: {r.status_code}<br>{r.text[:3000]}"
+    except Exception as e:
+        return f"Error: {e}"
