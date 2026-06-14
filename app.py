@@ -218,6 +218,65 @@ def debug_bdl():
 
 
 # ── ESPN API - Alineaciones via ESPN internal API ──────────────────────────────
+ESPN_TEAM_MAP = {
+    "Brazil":"Brasil","Morocco":"Marruecos","Switzerland":"Suiza","Qatar":"Qatar",
+    "Scotland":"Escocia","Haiti":"Haití","United States":"Estados Unidos",
+    "Paraguay":"Paraguay","Mexico":"México","South Africa":"Sudáfrica",
+    "South Korea":"Corea del Sur","Czech Republic":"Chequia",
+    "Canada":"Canadá","Bosnia and Herzegovina":"Bosnia y Herzegovina",
+    "Australia":"Australia","Turkey":"Turquía",
+}
+
+@app.route("/lineups")
+def lineups():
+    """Alineaciones de partidos del día vía ESPN"""
+    try:
+        # Obtener partidos del día
+        r = requests.get(
+            "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
+            timeout=10
+        )
+        events = r.json().get("events", [])
+        result = []
+        for ev in events:
+            eid = ev.get("id")
+            ename = ev.get("name","")
+            # Obtener alineaciones
+            lr = requests.get(
+                f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event={eid}",
+                timeout=10
+            )
+            if not lr.ok:
+                continue
+            ld = lr.json()
+            rosters = ld.get("rosters", [])
+            teams = []
+            for roster in rosters:
+                team_name = roster.get("team",{}).get("displayName","")
+                team_es = ESPN_TEAM_MAP.get(team_name, team_name)
+                starters = []
+                bench = []
+                for p in roster.get("roster", []):
+                    name = p.get("athlete",{}).get("displayName","")
+                    jersey = p.get("jersey","")
+                    pos = p.get("position",{}).get("abbreviation","")
+                    starter = p.get("starter", False)
+                    subbed_in = p.get("subbedIn", False)
+                    subbed_out = p.get("subbedOut", False)
+                    player = {"name": name, "jersey": jersey, "pos": pos,
+                              "subbedIn": subbed_in, "subbedOut": subbed_out}
+                    if starter:
+                        starters.append(player)
+                    else:
+                        bench.append(player)
+                teams.append({"team": team_es, "starters": starters, "bench": bench})
+            result.append({"eventId": eid, "name": ename, "teams": teams})
+        resp = jsonify(result)
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/debug_espn")
 def debug_espn():
     """Buscar event IDs del Mundial en ESPN"""
