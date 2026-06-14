@@ -214,3 +214,35 @@ def debug_bdl():
         return f"Status: {r.status_code}<br>{r.text[:3000]}"
     except Exception as e:
         return f"Error: {e}"
+
+
+# ── ESPN API - Alineaciones via ESPN internal API ──────────────────────────────
+@app.route("/debug_espn")
+def debug_espn():
+    """Buscar event IDs del Mundial en ESPN"""
+    try:
+        r = requests.get(
+            "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
+            timeout=10
+        )
+        events = r.json().get("events", [])
+        result = [{"id": e.get("id"), "name": e.get("name"), "date": e.get("date")} for e in events]
+        return f"Status: {r.status_code}<br><pre>{json.dumps(result, indent=2, ensure_ascii=False)}</pre>"
+    except Exception as e:
+        return f"Error: {e}"
+
+@app.route("/debug_espn_lineup/<event_id>")
+def debug_espn_lineup(event_id):
+    """Ver alineaciones de un partido ESPN"""
+    try:
+        r = requests.get(
+            f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event={event_id}",
+            timeout=10
+        )
+        d = r.json()
+        keys = list(d.keys())
+        rosters = d.get("rosters", [])
+        boxscore = d.get("boxscore", {})
+        return f"Status: {r.status_code}<br>Keys: {keys}<br>Rosters count: {len(rosters)}<br><pre>{json.dumps(rosters[:1] if rosters else boxscore, indent=2, ensure_ascii=False)[:3000]}</pre>"
+    except Exception as e:
+        return f"Error: {e}"
