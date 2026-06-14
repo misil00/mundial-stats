@@ -286,6 +286,29 @@ def lineups():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/debug_espn_score/<event_id>")
+def debug_espn_score(event_id):
+    try:
+        r = requests.get(
+            f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event={event_id}",
+            timeout=10
+        )
+        d = r.json()
+        header = d.get("header", {})
+        comps = header.get("competitions", [])
+        result = []
+        for comp in comps:
+            for team in comp.get("competitors", []):
+                result.append({
+                    "team": team.get("team", {}).get("displayName",""),
+                    "score": team.get("score",""),
+                    "homeAway": team.get("homeAway",""),
+                    "winner": team.get("winner", False)
+                })
+        return f"<pre>{json.dumps(result, indent=2, ensure_ascii=False)}</pre>"
+    except Exception as e:
+        return f"Error: {e}"
+
 @app.route("/debug_espn_stats/<event_id>")
 def debug_espn_stats(event_id):
     try:
