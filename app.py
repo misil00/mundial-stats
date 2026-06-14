@@ -488,3 +488,228 @@ def rating():
         return resp
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── PERSISTENCIA DE DATOS ESPN + MARCA ────────────────────────────────────────
+import os
+
+DATA_FILE = "/tmp/mundial_data.json"
+
+def load_stored_data():
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, "r") as f:
+                return json.load(f)
+    except:
+        pass
+    return {"scores": {}, "lineups": {}, "match_stats": {}, "form": {}}
+
+def save_stored_data(data):
+    try:
+        with open(DATA_FILE, "w") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception as e:
+        print(f"Error saving data: {e}")
+
+def fetch_espn_event_full(event_id):
+    """Fetch everything ESPN gives for a single event"""
+    try:
+        r = requests.get(
+            f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event={event_id}",
+            timeout=15
+        )
+        if not r.ok:
+            return None
+        d = r.json()
+
+        result = {"event_id": event_id, "updated": datetime.utcnow().isoformat()}
+
+        # Score from header
+        header = d.get("header", {})
+        for comp in header.get("competitions", []):
+            teams = []
+            status = comp.get("status", {}).get("type", {}).get("name", "")
+            result["status"] = status
+            result["date"] = comp.get("date", "")
+            for c in comp.get("competitors", []):
+                team_name = ESPN_TEAM_NAME_MAP.get(c.get("team", {}).get("displayName", ""), c.get("team", {}).get("displayName", ""))
+                teams.append({
+                    "team": team_name,
+                    "score": c.get("score", ""),
+                    "homeAway": c.get("homeAway", ""),
+                    "winner": c.get("winner", False)
+                })
+            result["teams_score"] = teams
+
+        # Rosters / lineups
+        rosters = d.get("rosters", [])
+        result["rosters"] = []
+        for roster in rosters:
+            team_name = ESPN_TEAM_NAME_MAP.get(roster.get("team", {}).get("displayName", ""), roster.get("team", {}).get("displayName", ""))
+            starters = []
+            bench = []
+            for p in roster.get("roster", []):
+                player = {
+                    "name": p.get("athlete", {}).get("displayName", ""),
+                    "jersey": p.get("jersey", ""),
+                    "pos": p.get("position", {}).get("abbreviation", ""),
+                    "starter": p.get("starter", False),
+                    "subbedIn": p.get("subbedIn", False),
+                    "subbedOut": p.get("subbedOut", False),
+                    "formationPlace": p.get("formationPlace", ""),
+                    "stats": {s["name"]: s["displayValue"] for s in p.get("stats", [])}
+                }
+                if p.get("starter"):
+                    starters.append(player)
+                else:
+                    bench.append(player)
+            result["rosters"].append({
+                "team": team_name,
+                "starters": starters,
+                "bench": bench
+            })
+
+        # Boxscore stats
+        boxscore = d.get("boxscore", {})
+        result["boxscore_teams"] = []
+        for t in boxscore.get("teams", []):
+            team_name = ESPN_TEAM_NAME_MAP.get(t.get("team", {}).get("displayName", ""), t.get("team", {}).get("displayName", ""))
+            stats = {s["name"]: s["displayValue"] for s in t.get("statistics", [])}
+            result["boxscore_teams"].append({"team": team_name, "stats": stats})
+
+        # Form / last 5 games
+        result["form"] = d.get("form", [])
+
+        # Key events (goals, cards, subs)
+        result["keyEvents"] = d.get("keyEvents", [])
+
+        return result
+    except Exception as e:
+        print(f"Error fetching event {event_id}: {e}")
+        return None
+
+@app.route("/capture/<event_id>")
+def capture_event(event_id):
+    """Capture and store all ESPN data for an event"""
+    data = load_stored_data()
+    event_data = fetch_espn_event_full(event_id)
+    if not event_data:
+        return jsonify({"error": "Could not fetch event"}), 500
+    data["lineups"][event_id] = event_data
+    # Also store score separately for quick access
+    if event_data.get("teams_score"):
+        for t in event_data["teams_score"]:
+            key = f"{event_id}_{t['homeAway']}"
+            if not data["scores"].get(event_id):
+                data["scores"][event_id] = {}
+            data["scores"][event_id][t["homeAway"]] = {
+                "team": t["team"],
+                "score": t["score"],
+                "winner": t["winner"],
+                "status": event_data.get("status", ""),
+                "date": event_data.get("date", "")
+            }
+    save_stored_data(data)
+    resp = jsonify({"ok": True, "event_id": event_id, "data": event_data})
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
+
+@app.route("/capture_all")
+def capture_all():
+    """Capture all events from ESPN scoreboard + known past event IDs"""
+    stored = load_stored_data()
+
+    # Known past event IDs (Day 1 and 2 of World Cup 2026)
+    known_ids = [
+        "760414", "760415", "760416", "760417",  # Day 1 guesses
+        "760418", "760419", "760420",              # Day 2 confirmed
+        "760421", "760422", "760423", "760424", "760425"  # Day 3
+    ]
+
+    # Also get today's events from scoreboard
+    try:
+        r = requests.get(
+            "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
+            timeout=10
+        )
+        for ev in r.json().get("events", []):
+            eid = ev.get("id")
+            if eid and eid not in known_ids:
+                known_ids.append(eid)
+    except:
+        pass
+
+    captured = []
+    failed = []
+    for eid in known_ids:
+        event_data = fetch_espn_event_full(eid)
+        if event_data and event_data.get("teams_score"):
+            stored["lineups"][eid] = event_data
+            stored["scores"][eid] = {}
+            for t in event_data.get("teams_score", []):
+                stored["scores"][eid][t["homeAway"]] = {
+                    "team": t["team"],
+                    "score": t["score"],
+                    "winner": t["winner"],
+                    "status": event_data.get("status", ""),
+                    "date": event_data.get("date", "")
+                }
+            captured.append(eid)
+        else:
+            failed.append(eid)
+
+    save_stored_data(stored)
+    resp = jsonify({"captured": captured, "failed": failed, "total": len(captured)})
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
+
+@app.route("/stored_scores")
+def stored_scores():
+    """Return all stored scores"""
+    data = load_stored_data()
+    # Convert to list format matching what the app expects
+    scores_list = []
+    for eid, sides in data.get("scores", {}).items():
+        home = sides.get("home", {})
+        away = sides.get("away", {})
+        if home and away and home.get("score", "") != "" and away.get("score", "") != "":
+            scores_list.append({
+                "eventId": eid,
+                "home": home.get("team", ""),
+                "away": away.get("team", ""),
+                "homeScore": home.get("score", ""),
+                "awayScore": away.get("score", ""),
+                "status": home.get("status", ""),
+                "date": home.get("date", "")
+            })
+    resp = jsonify(scores_list)
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
+
+@app.route("/stored_lineups")
+def stored_lineups():
+    """Return all stored lineups"""
+    data = load_stored_data()
+    result = []
+    for eid, ev in data.get("lineups", {}).items():
+        if ev.get("rosters"):
+            result.append({
+                "eventId": eid,
+                "status": ev.get("status", ""),
+                "date": ev.get("date", ""),
+                "teams": [
+                    {
+                        "team": r["team"],
+                        "starters": r["starters"],
+                        "bench": r["bench"]
+                    } for r in ev.get("rosters", [])
+                ],
+                "boxscore": ev.get("boxscore_teams", []),
+                "keyEvents": ev.get("keyEvents", [])
+            })
+    resp = jsonify(result)
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
