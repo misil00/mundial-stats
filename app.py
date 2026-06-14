@@ -192,6 +192,66 @@ def stats():
 
     goals = goals_marca if goals_marca else goals_of
 
+    # Scores: combinar stored + live ESPN
+    stored_data = load_stored_data()
+    stored_scores_list = []
+    for eid, sides in stored_data.get("scores", {}).items():
+        home = sides.get("home", {})
+        away = sides.get("away", {})
+        if home and away and home.get("score","") != "" and away.get("score","") != "":
+            stored_scores_list.append({
+                "home": home.get("team",""),
+                "away": away.get("team",""),
+                "homeScore": home.get("score",""),
+                "awayScore": away.get("score",""),
+                "status": home.get("status",""),
+                "eventId": eid
+            })
+
+    # Agregar scores en vivo que no estén ya guardados
+    live_keys = {f"{s['home']}_{s['away']}" for s in scores}
+    stored_keys = {f"{s['home']}_{s['away']}" for s in stored_scores_list}
+    all_scores = stored_scores_list + [s for s in scores if f"{s['home']}_{s['away']}" not in stored_keys]
+
+    # Auto-guardar scores en vivo que sean FINAL
+    changed = False
+    for s in scores:
+        if s.get("status") == "STATUS_FINAL" or s.get("status") == "STATUS_FULL_TIME":
+            # Buscar el eventId correspondiente
+            for eid, sides in stored_data.get("scores", {}).items():
+                h = sides.get("home", {})
+                a = sides.get("away", {})
+                if h.get("team") == s["home"] and a.get("team") == s["away"]:
+                    break
+            else:
+                changed = True
+    if changed:
+        # Re-capturar para guardar nuevos scores finales
+        try:
+            r = requests.get(
+                "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
+                timeout=10
+            )
+            for ev in r.json().get("events", []):
+                eid = ev.get("id")
+                comps = ev.get("competitions", [])
+                if comps:
+                    status = comps[0].get("status",{}).get("type",{}).get("name","")
+                    if status in ["STATUS_FINAL","STATUS_FULL_TIME"]:
+                        edata = fetch_espn_event_full(eid)
+                        if edata and edata.get("teams_score"):
+                            stored_data["scores"][eid] = {}
+                            stored_data["lineups"][eid] = edata
+                            for t in edata["teams_score"]:
+                                stored_data["scores"][eid][t["homeAway"]] = {
+                                    "team": t["team"], "score": t["score"],
+                                    "winner": t["winner"], "status": status,
+                                    "date": edata.get("date","")
+                                }
+            save_stored_data(stored_data)
+        except:
+            pass
+
     result = {
         "goals": goals,
         "assists": assists,
@@ -199,7 +259,7 @@ def stats():
         "redCards": red,
         "cleanSheets": clean,
         "saves": saves,
-        "scores": scores,
+        "scores": all_scores,
         "updated": datetime.utcnow().isoformat() + "Z"
     }
 
