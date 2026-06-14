@@ -288,7 +288,6 @@ def lineups():
 
 @app.route("/debug_espn_stats/<event_id>")
 def debug_espn_stats(event_id):
-    """Ver estadísticas del boxscore de ESPN"""
     try:
         r = requests.get(
             f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event={event_id}",
@@ -296,7 +295,10 @@ def debug_espn_stats(event_id):
         )
         d = r.json()
         boxscore = d.get("boxscore", {})
-        return f"<pre>{json.dumps(boxscore, indent=2, ensure_ascii=False)[:5000]}</pre>"
+        keys = list(boxscore.keys())
+        teams = boxscore.get("teams", [])
+        players = boxscore.get("players", [])
+        return f"<b>Keys boxscore:</b> {keys}<br><br><b>Teams stats:</b><pre>{json.dumps(teams, indent=2, ensure_ascii=False)[:4000]}</pre>"
     except Exception as e:
         return f"Error: {e}"
 
