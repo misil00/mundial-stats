@@ -50,20 +50,74 @@ def fetch_marca_rank(sort_by):
         print(f"Error Marca {sort_by}: {e}")
         return []
 
+ESPN_TEAM_NAME_MAP = {
+    "Brazil":"Brasil","Morocco":"Marruecos","Switzerland":"Suiza","Qatar":"Qatar",
+    "Scotland":"Escocia","Haiti":"Haití","United States":"Estados Unidos",
+    "Paraguay":"Paraguay","Mexico":"México","South Africa":"Sudáfrica",
+    "South Korea":"Corea del Sur","Czech Republic":"Chequia","Czechia":"Chequia",
+    "Canada":"Canadá","Bosnia and Herzegovina":"Bosnia y Herzegovina",
+    "Australia":"Australia","Turkey":"Turquía","Netherlands":"Países Bajos",
+    "Japan":"Japón","Tunisia":"Túnez","Sweden":"Suecia","Belgium":"Bélgica",
+    "Egypt":"Egipto","Iran":"Irán","New Zealand":"Nueva Zelanda","Spain":"España",
+    "Cape Verde":"Cabo Verde","Saudi Arabia":"Arabia Saudita","Uruguay":"Uruguay",
+    "France":"Francia","Senegal":"Senegal","Norway":"Noruega","Iraq":"Irak",
+    "Argentina":"Argentina","Algeria":"Argelia","Austria":"Austria",
+    "Jordan":"Jordania","Portugal":"Portugal","Uzbekistan":"Uzbekistán",
+    "Colombia":"Colombia","DR Congo":"RD Congo","England":"Inglaterra",
+    "Croatia":"Croacia","Ghana":"Ghana","Panama":"Panamá","Germany":"Alemania",
+    "Curacao":"Curazao","Ecuador":"Ecuador","Ivory Coast":"Costa de Marfil",
+}
+
+def fetch_espn_scores():
+    """Scores en tiempo real desde ESPN"""
+    try:
+        r = requests.get(
+            "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
+            timeout=10
+        )
+        r.raise_for_status()
+        events = r.json().get("events", [])
+        scores = []
+        for ev in events:
+            comps = ev.get("competitions", [])
+            if not comps: continue
+            comp = comps[0]
+            status = comp.get("status", {}).get("type", {}).get("name", "")
+            # Solo partidos en juego o terminados
+            if status not in ["STATUS_IN_PROGRESS", "STATUS_FINAL", "STATUS_HALFTIME"]:
+                continue
+            competitors = comp.get("competitors", [])
+            if len(competitors) < 2: continue
+            home = next((c for c in competitors if c.get("homeAway")=="home"), competitors[0])
+            away = next((c for c in competitors if c.get("homeAway")=="away"), competitors[1])
+            home_name = ESPN_TEAM_NAME_MAP.get(home.get("team",{}).get("displayName",""), home.get("team",{}).get("displayName",""))
+            away_name = ESPN_TEAM_NAME_MAP.get(away.get("team",{}).get("displayName",""), away.get("team",{}).get("displayName",""))
+            home_score = home.get("score","0")
+            away_score = away.get("score","0")
+            scores.append({
+                "home": home_name,
+                "away": away_name,
+                "homeScore": int(home_score) if str(home_score).isdigit() else 0,
+                "awayScore": int(away_score) if str(away_score).isdigit() else 0,
+                "status": status
+            })
+        return scores
+    except Exception as e:
+        print(f"Error ESPN scores: {e}")
+        return []
+
 def fetch_openfootball():
     try:
         r = requests.get(OF_URL, timeout=15)
         r.raise_for_status()
         data = r.json()
         scorers = {}
-        scores = []
         for m in data.get("matches", []):
             if not m.get("score") or not m["score"].get("ft"):
                 continue
             ga, gb = m["score"]["ft"]
             team_a = es(m.get("team1", ""))
             team_b = es(m.get("team2", ""))
-            scores.append({"home": team_a, "away": team_b, "homeScore": ga, "awayScore": gb})
             for g in m.get("goals1", []):
                 name = g.get("name", "")
                 if not name: continue
@@ -78,14 +132,15 @@ def fetch_openfootball():
                 if key not in scorers:
                     scorers[key] = {"jugador": name, "seleccion": team_b, "total": 0}
                 scorers[key]["total"] += 1
-        return sorted(scorers.values(), key=lambda x: -x["total"])[:15], scores
+        return sorted(scorers.values(), key=lambda x: -x["total"])[:15]
     except Exception as e:
         print(f"Error openfootball: {e}")
-        return [], []
+        return []
 
 @app.route("/stats")
 def stats():
-    goals_of, scores = fetch_openfootball()
+    goals_of = fetch_openfootball()
+    scores = fetch_espn_scores()
 
     # Tarjetas desde Marca
     cards_rank = fetch_marca_rank("cards")
