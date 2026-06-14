@@ -286,8 +286,21 @@ def lineups():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/debug_espn")
-def debug_espn():
+@app.route("/debug_espn_stats/<event_id>")
+def debug_espn_stats(event_id):
+    """Ver estadísticas del boxscore de ESPN"""
+    try:
+        r = requests.get(
+            f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event={event_id}",
+            timeout=10
+        )
+        d = r.json()
+        boxscore = d.get("boxscore", {})
+        return f"<pre>{json.dumps(boxscore, indent=2, ensure_ascii=False)[:5000]}</pre>"
+    except Exception as e:
+        return f"Error: {e}"
+
+
     """Buscar event IDs del Mundial en ESPN"""
     try:
         r = requests.get(
