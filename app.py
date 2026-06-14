@@ -193,7 +193,7 @@ def stats():
     goals = goals_marca if goals_marca else goals_of
 
     # Scores: combinar stored + live ESPN
-    stored_data = load_stored_data()
+    stored_data = get_cache()
     stored_scores_list = []
     for eid, sides in stored_data.get("scores", {}).items():
         home = sides.get("home", {})
@@ -226,29 +226,8 @@ def stats():
             else:
                 changed = True
     if changed:
-        # Re-capturar para guardar nuevos scores finales
         try:
-            r = requests.get(
-                "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
-                timeout=10
-            )
-            for ev in r.json().get("events", []):
-                eid = ev.get("id")
-                comps = ev.get("competitions", [])
-                if comps:
-                    status = comps[0].get("status",{}).get("type",{}).get("name","")
-                    if status in ["STATUS_FINAL","STATUS_FULL_TIME"]:
-                        edata = fetch_espn_event_full(eid)
-                        if edata and edata.get("teams_score"):
-                            stored_data["scores"][eid] = {}
-                            stored_data["lineups"][eid] = edata
-                            for t in edata["teams_score"]:
-                                stored_data["scores"][eid][t["homeAway"]] = {
-                                    "team": t["team"], "score": t["score"],
-                                    "winner": t["winner"], "status": status,
-                                    "date": edata.get("date","")
-                                }
-            save_stored_data(stored_data)
+            _auto_capture()
         except:
             pass
 
@@ -553,23 +532,53 @@ def rating():
 # ── PERSISTENCIA DE DATOS ESPN + MARCA ────────────────────────────────────────
 import os
 
-DATA_FILE = "/tmp/mundial_data.json"
+# ── IN-MEMORY CACHE (persiste mientras el servidor está vivo) ─────────────────
+_cache = {"scores": {}, "lineups": {}, "initialized": False}
 
-def load_stored_data():
+def get_cache():
+    global _cache
+    if not _cache["initialized"]:
+        _auto_capture()
+    return _cache
+
+def _auto_capture():
+    global _cache
+    known_ids = [
+        "760414","760415","760416","760417",
+        "760418","760419","760420","760421",
+        "760422","760423","760424","760425",
+        "760426","760427","760428","760429","760430"
+    ]
     try:
-        if os.path.exists(DATA_FILE):
-            with open(DATA_FILE, "r") as f:
-                return json.load(f)
+        r = requests.get(
+            "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
+            timeout=10
+        )
+        for ev in r.json().get("events", []):
+            eid = ev.get("id")
+            if eid and eid not in known_ids:
+                known_ids.append(eid)
     except:
         pass
-    return {"scores": {}, "lineups": {}, "match_stats": {}, "form": {}}
 
-def save_stored_data(data):
-    try:
-        with open(DATA_FILE, "w") as f:
-            json.dump(data, f, ensure_ascii=False)
-    except Exception as e:
-        print(f"Error saving data: {e}")
+    for eid in known_ids:
+        try:
+            edata = fetch_espn_event_full(eid)
+            if edata and edata.get("teams_score"):
+                _cache["lineups"][eid] = edata
+                _cache["scores"][eid] = {}
+                for t in edata["teams_score"]:
+                    _cache["scores"][eid][t["homeAway"]] = {
+                        "team": t["team"], "score": t["score"],
+                        "winner": t["winner"], "status": edata.get("status",""),
+                        "date": edata.get("date","")
+                    }
+        except:
+            pass
+    _cache["initialized"] = True
+    print(f"Cache initialized: {len(_cache['scores'])} events")
+
+
 
 def fetch_espn_event_full(event_id):
     """Fetch everything ESPN gives for a single event"""
@@ -651,7 +660,7 @@ def fetch_espn_event_full(event_id):
 @app.route("/capture/<event_id>")
 def capture_event(event_id):
     """Capture and store all ESPN data for an event"""
-    data = load_stored_data()
+    data = get_cache()
     event_data = fetch_espn_event_full(event_id)
     if not event_data:
         return jsonify({"error": "Could not fetch event"}), 500
@@ -669,15 +678,14 @@ def capture_event(event_id):
                 "status": event_data.get("status", ""),
                 "date": event_data.get("date", "")
             }
-    save_stored_data(data)
-    resp = jsonify({"ok": True, "event_id": event_id, "data": event_data})
+        resp = jsonify({"ok": True, "event_id": event_id, "data": event_data})
     resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
 
 @app.route("/capture_all")
 def capture_all():
     """Capture all events from ESPN scoreboard + known past event IDs"""
-    stored = load_stored_data()
+    stored = get_cache()
 
     # Known past event IDs (Day 1 and 2 of World Cup 2026)
     known_ids = [
@@ -718,15 +726,14 @@ def capture_all():
         else:
             failed.append(eid)
 
-    save_stored_data(stored)
-    resp = jsonify({"captured": captured, "failed": failed, "total": len(captured)})
+        resp = jsonify({"captured": captured, "failed": failed, "total": len(captured)})
     resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
 
 @app.route("/stored_scores")
 def stored_scores():
     """Return all stored scores"""
-    data = load_stored_data()
+    data = get_cache()
     # Convert to list format matching what the app expects
     scores_list = []
     for eid, sides in data.get("scores", {}).items():
@@ -749,7 +756,7 @@ def stored_scores():
 @app.route("/stored_lineups")
 def stored_lineups():
     """Return all stored lineups"""
-    data = load_stored_data()
+    data = get_cache()
     result = []
     for eid, ev in data.get("lineups", {}).items():
         if ev.get("rosters"):
