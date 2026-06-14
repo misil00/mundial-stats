@@ -141,6 +141,12 @@ def fetch_openfootball():
 def stats():
     goals_of = fetch_openfootball()
     scores = fetch_espn_scores()
+    # Si el cache está vacío, recapturar todo
+    if not _cache.get("scores"):
+        try:
+            _auto_capture()
+        except:
+            pass
     # Auto-capturar partidos finalizados de hoy que no estén en cache
     try:
         for ev in scores:
