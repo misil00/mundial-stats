@@ -214,6 +214,22 @@ def stats():
         if name and gc == 0 and p.get("games", 0) > 0:
             clean.append({"jugador": name, "seleccion": team, "total": p.get("games", 1)})
 
+    # Equipos desde Marca
+    equipos_rank = fetch_marca_rank("passes")
+    equipos = []
+    for p in equipos_rank:
+        team = es(p.get("teamName", ""))
+        if team:
+            equipos.append({
+                "seleccion": team,
+                "gf": p.get("goalsFor", p.get("goals", 0)),
+                "gc": p.get("goalsAgainst", p.get("goalsConceded", 0)),
+                "disparos": p.get("shots", p.get("totalShots", 0)),
+                "faltas": p.get("foulsCommitted", p.get("fouls", 0)),
+                "ta": p.get("yellowCards", 0),
+                "tr": p.get("redCards", 0)
+            })
+
     goals = goals_marca if goals_marca else goals_of
 
     # Scores: combinar stored + live ESPN
@@ -262,6 +278,7 @@ def stats():
         "redCards": red,
         "cleanSheets": clean,
         "saves": saves,
+        "equipos": equipos,
         "scores": all_scores,
         "updated": datetime.utcnow().isoformat() + "Z"
     }
