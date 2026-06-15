@@ -578,27 +578,92 @@ _cache = {"scores": {}, "lineups": {}, "initialized": False}
 
 # ESPN team IDs for FIFA World Cup 2026
 ESPN_TEAM_IDS = {
-    "México":3991,"Sudáfrica":5629,"Corea del Sur":379,"Chequia":117,
-    "Canadá":191,"Bosnia y Herzegovina":452,"Qatar":3454,"Suiza":160,
-    "Brasil":6,"Marruecos":1980,"Haití":1972,"Escocia":269,
-    "Estados Unidos":564,"Paraguay":2005,"Australia":109,"Turquía":2381,
-    "Alemania":3,"Curazao":5765,"Costa de Marfil":3293,"Ecuador":1973,
-    "Países Bajos":4,"Japón":202,"Túnez":2178,"Suecia":148,
-    "Bélgica":55,"Egipto":2026,"Irán":115,"Nueva Zelanda":2273,
-    "España":164,"Cabo Verde":5799,"Arabia Saudita":2074,"Uruguay":195,
-    "Francia":478,"Senegal":2081,"Noruega":3307,"Irak":3291,
-    "Argentina":7,"Argelia":3285,"Austria":112,"Jordania":3295,
-    "Portugal":597,"Uzbekistán":4085,"Colombia":202,"RD Congo":3289,
-    "Inglaterra":10,"Croacia":118,"Ghana":3285,"Panamá":3990
+    "Argelia":624,"Argentina":202,"Australia":628,"Austria":474,
+    "Bélgica":459,"Bosnia y Herzegovina":452,"Brasil":205,"Canadá":206,
+    "Cabo Verde":2597,"Colombia":208,"RD Congo":2850,"Croacia":477,
+    "Curazao":11678,"Chequia":450,"Ecuador":209,"Egipto":2620,
+    "Inglaterra":448,"Francia":478,"Alemania":481,"Ghana":4469,
+    "Haití":2654,"Irán":469,"Irak":4375,"Costa de Marfil":4789,
+    "Japón":627,"Jordania":2917,"México":203,"Marruecos":2869,
+    "Países Bajos":449,"Nueva Zelanda":2666,"Noruega":464,"Panamá":2659,
+    "Paraguay":210,"Portugal":482,"Qatar":4398,"Arabia Saudita":655,
+    "Escocia":580,"Senegal":654,"Sudáfrica":467,"Corea del Sur":451,
+    "España":164,"Suecia":466,"Suiza":475,"Túnez":659,
+    "Turquía":465,"Estados Unidos":660,"Uruguay":212,"Uzbekistán":2570
 }
 
 _squads_cache = {}
+_espn_id_map = {}  # nombre ESPN -> id real, construido del scoreboard
+
+SPANISH_TO_ESPN = {
+    "México":"Mexico","Sudáfrica":"South Africa","Corea del Sur":"South Korea",
+    "Chequia":"Czechia","Canadá":"Canada","Bosnia y Herzegovina":"Bosnia-Herzegovina",
+    "Suiza":"Switzerland","Brasil":"Brazil","Marruecos":"Morocco","Haití":"Haiti",
+    "Escocia":"Scotland","Estados Unidos":"USA","Australia":"Australia","Turquía":"Türkiye",
+    "Alemania":"Germany","Curazao":"Curaçao","Costa de Marfil":"Ivory Coast","Ecuador":"Ecuador",
+    "Países Bajos":"Netherlands","Japón":"Japan","Túnez":"Tunisia","Suecia":"Sweden",
+    "Bélgica":"Belgium","Egipto":"Egypt","Irán":"Iran","Nueva Zelanda":"New Zealand",
+    "España":"Spain","Cabo Verde":"Cape Verde","Arabia Saudita":"Saudi Arabia","Uruguay":"Uruguay",
+    "Francia":"France","Senegal":"Senegal","Noruega":"Norway","Irak":"Iraq",
+    "Argentina":"Argentina","Argelia":"Algeria","Austria":"Austria","Jordania":"Jordan",
+    "Portugal":"Portugal","Uzbekistán":"Uzbekistan","Colombia":"Colombia","RD Congo":"DR Congo",
+    "Inglaterra":"England","Croacia":"Croatia","Ghana":"Ghana","Panamá":"Panama",
+    "Paraguay":"Paraguay","Qatar":"Qatar"
+}
+
+def build_espn_id_map():
+    """Construye mapa nombre->id real desde ESPN (lista completa de equipos + scoreboard)"""
+    global _espn_id_map
+    # 1. Lista completa de equipos del torneo (todos, hayan jugado o no)
+    try:
+        r = requests.get(
+            "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/teams?limit=100",
+            timeout=10
+        )
+        if r.ok:
+            data = r.json()
+            sports = data.get("sports", [])
+            for sport in sports:
+                for league in sport.get("leagues", []):
+                    for t in league.get("teams", []):
+                        team = t.get("team", {})
+                        tid = team.get("id")
+                        name = team.get("displayName", "")
+                        if tid and name:
+                            _espn_id_map[name] = tid
+    except:
+        pass
+    # 2. Scoreboard (respaldo para equipos que ya jugaron)
+    try:
+        r = requests.get(
+            "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
+            timeout=10
+        )
+        if r.ok:
+            data = r.json()
+            for ev in data.get("events", []):
+                for comp in ev.get("competitions", []):
+                    for c in comp.get("competitors", []):
+                        team = c.get("team", {})
+                        tid = team.get("id")
+                        name = team.get("displayName", "")
+                        if tid and name:
+                            _espn_id_map[name] = tid
+    except:
+        pass
 
 def fetch_espn_squad(team_name):
-    global _squads_cache
+    global _squads_cache, _espn_id_map
     if team_name in _squads_cache:
         return _squads_cache[team_name]
+    # 1. ID fijo verificado (los 48 equipos reales)
     team_id = ESPN_TEAM_IDS.get(team_name)
+    # 2. Respaldo: buscar ID real dinámicamente
+    if not team_id:
+        if not _espn_id_map:
+            build_espn_id_map()
+        espn_name = SPANISH_TO_ESPN.get(team_name, team_name)
+        team_id = _espn_id_map.get(espn_name) or _espn_id_map.get(team_name)
     if not team_id:
         return None
     try:
@@ -621,6 +686,8 @@ def fetch_espn_squad(team_name):
         if coach:
             c = coach[0]
             coach_name = f"{c.get('firstName','')} {c.get('lastName','')}".strip()
+        if not players:
+            return None
         result = {"players": players, "coach": coach_name}
         _squads_cache[team_name] = result
         return result
@@ -844,6 +911,13 @@ def stored_scores():
     resp = jsonify(scores_list)
     resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
+
+@app.route("/debug_ids")
+def debug_ids():
+    """Ver el mapa de IDs reales de ESPN"""
+    if not _espn_id_map:
+        build_espn_id_map()
+    return jsonify({"count": len(_espn_id_map), "ids": _espn_id_map})
 
 @app.route("/squad/<team_name>")
 def squad(team_name):
