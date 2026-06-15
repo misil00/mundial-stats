@@ -559,6 +559,57 @@ import os
 # ── IN-MEMORY CACHE (persiste mientras el servidor está vivo) ─────────────────
 _cache = {"scores": {}, "lineups": {}, "initialized": False}
 
+# ESPN team IDs for FIFA World Cup 2026
+ESPN_TEAM_IDS = {
+    "México":3991,"Sudáfrica":5629,"Corea del Sur":379,"Chequia":117,
+    "Canadá":191,"Bosnia y Herzegovina":452,"Qatar":3454,"Suiza":160,
+    "Brasil":6,"Marruecos":1980,"Haití":1972,"Escocia":269,
+    "Estados Unidos":564,"Paraguay":2005,"Australia":109,"Turquía":2381,
+    "Alemania":3,"Curazao":5765,"Costa de Marfil":3293,"Ecuador":1973,
+    "Países Bajos":4,"Japón":202,"Túnez":2178,"Suecia":148,
+    "Bélgica":55,"Egipto":2026,"Irán":115,"Nueva Zelanda":2273,
+    "España":164,"Cabo Verde":5799,"Arabia Saudita":2074,"Uruguay":195,
+    "Francia":478,"Senegal":2081,"Noruega":3307,"Irak":3291,
+    "Argentina":7,"Argelia":3285,"Austria":112,"Jordania":3295,
+    "Portugal":597,"Uzbekistán":4085,"Colombia":202,"RD Congo":3289,
+    "Inglaterra":10,"Croacia":118,"Ghana":3285,"Panamá":3990
+}
+
+_squads_cache = {}
+
+def fetch_espn_squad(team_name):
+    global _squads_cache
+    if team_name in _squads_cache:
+        return _squads_cache[team_name]
+    team_id = ESPN_TEAM_IDS.get(team_name)
+    if not team_id:
+        return None
+    try:
+        url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/teams/{team_id}/roster"
+        r = requests.get(url, timeout=10)
+        if not r.ok:
+            return None
+        data = r.json()
+        athletes = data.get("athletes", [])
+        players = []
+        for a in athletes:
+            players.append({
+                "jersey": a.get("jersey", ""),
+                "name": a.get("displayName", a.get("fullName", "")),
+                "pos": a.get("position", {}).get("abbreviation", ""),
+                "posName": a.get("position", {}).get("displayName", "")
+            })
+        coach = data.get("coach", [])
+        coach_name = ""
+        if coach:
+            c = coach[0]
+            coach_name = f"{c.get('firstName','')} {c.get('lastName','')}".strip()
+        result = {"players": players, "coach": coach_name}
+        _squads_cache[team_name] = result
+        return result
+    except:
+        return None
+
 def get_cache():
     global _cache
     if not _cache["initialized"]:
@@ -776,6 +827,14 @@ def stored_scores():
     resp = jsonify(scores_list)
     resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
+
+@app.route("/squad/<team_name>")
+def squad(team_name):
+    """Return official squad for a team from ESPN"""
+    result = fetch_espn_squad(team_name)
+    if result is None:
+        return jsonify({"error": "Team not found or no data", "team": team_name}), 404
+    return jsonify({"team": team_name, "players": result["players"], "coach": result["coach"]})
 
 @app.route("/stored_lineups")
 def stored_lineups():
