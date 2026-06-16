@@ -50,19 +50,7 @@ def fetch_marca_rank(sort_by):
         print(f"Error Marca {sort_by}: {e}")
         return []
 
-MARCA_TEAM_BASE = "https://api.unidadeditorial.es/sports/v1/team-total-rank/sport/01/tournament/0117/season/2025"
-
-def fetch_marca_team_rank(sort_by):
-    """Fetch TEAM ranking from Marca - one row per team"""
-    try:
-        url = f"{MARCA_TEAM_BASE}/sort/{sort_by}?site=2&mn=50"
-        r = requests.get(url, headers=HEADERS, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        return data.get("data", {}).get("rank", [])
-    except Exception as e:
-        print(f"Error Marca team {sort_by}: {e}")
-        return []
+MARCA_TEAM_BASE = ""
 
 ESPN_TEAM_NAME_MAP = {
     "Brazil":"Brasil","Morocco":"Marruecos","Switzerland":"Suiza","Qatar":"Qatar",
@@ -96,7 +84,12 @@ def fetch_espn_scores():
             comps = ev.get("competitions", [])
             if not comps: continue
             comp = comps[0]
-            status = comp.get("status", {}).get("type", {}).get("name", "")
+            status_type = comp.get("status", {}).get("type", {})
+            status = status_type.get("name", "")
+            status_detail = status_type.get("shortDetail", status_type.get("detail", ""))
+            status_desc = status_type.get("description", "")
+            display_clock = comp.get("status", {}).get("displayClock", "")
+            period = comp.get("status", {}).get("period", 0)
             # Solo partidos en juego o terminados
             if status not in ["STATUS_IN_PROGRESS", "STATUS_FINAL", "STATUS_HALFTIME"]:
                 continue
@@ -113,7 +106,12 @@ def fetch_espn_scores():
                 "away": away_name,
                 "homeScore": int(home_score) if str(home_score).isdigit() else 0,
                 "awayScore": int(away_score) if str(away_score).isdigit() else 0,
-                "status": status
+                "status": status,
+                "statusDetail": status_detail,
+                "statusDesc": status_desc,
+                "clock": display_clock,
+                "period": period,
+                "eventId": ev.get("id","")
             })
         return scores
     except Exception as e:
@@ -228,23 +226,63 @@ def stats():
         if name and gc == 0 and p.get("games", 0) > 0:
             clean.append({"jugador": name, "seleccion": team, "total": p.get("games", 1)})
 
-    # Equipos desde Marca - endpoint de EQUIPOS (una fila por equipo)
-    equipos_rank = fetch_marca_team_rank("passes")
+    # Estadística por equipo desde ESPN (acumulado de todos los partidos del scoreboard)
     equipos_dict = {}
-    for p in equipos_rank:
-        team = es(p.get("teamName", ""))
-        if not team or team in equipos_dict:
-            continue
-        equipos_dict[team] = {
-            "seleccion": team,
-            "gf": p.get("goalsFor", p.get("goals", 0)),
-            "gc": p.get("goalsAgainst", p.get("goalsConceded", 0)),
-            "disparos": p.get("shots", p.get("totalShots", 0)),
-            "faltas": p.get("foulsCommitted", p.get("fouls", 0)),
-            "ta": p.get("yellowCards", 0),
-            "tr": p.get("redCards", 0)
-        }
-    equipos = sorted(equipos_dict.values(), key=lambda e: (-(e["gf"] or 0), e["gc"] or 0))
+    try:
+        sb = requests.get(
+            "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
+            timeout=10
+        )
+        if sb.ok:
+            for ev in sb.json().get("events", []):
+                for comp in ev.get("competitions", []):
+                    st = comp.get("status", {}).get("type", {}).get("name", "")
+                    # Solo partidos en juego o terminados (tienen estadística)
+                    if st not in ["STATUS_IN_PROGRESS", "STATUS_HALFTIME", "STATUS_FINAL", "STATUS_FULL_TIME"]:
+                        continue
+                    for c in comp.get("competitors", []):
+                        tname = c.get("team", {}).get("displayName", "")
+                        team = ESPN_TEAM_NAME_MAP.get(tname, tname)
+                        if not team:
+                            continue
+                        st_map = {s.get("name"): s.get("displayValue", "0") for s in c.get("statistics", [])}
+                        def num(v):
+                            try: return float(v)
+                            except: return 0
+                        if team not in equipos_dict:
+                            equipos_dict[team] = {"seleccion": team, "gf": 0, "gc": 0,
+                                "disparos": 0, "tirosArco": 0, "corners": 0,
+                                "faltas": 0, "asistencias": 0, "posesion": 0, "_pj": 0}
+                        e = equipos_dict[team]
+                        e["gf"] += int(num(st_map.get("totalGoals", 0)))
+                        e["disparos"] += int(num(st_map.get("totalShots", 0)))
+                        e["tirosArco"] += int(num(st_map.get("shotsOnTarget", 0)))
+                        e["corners"] += int(num(st_map.get("wonCorners", 0)))
+                        e["faltas"] += int(num(st_map.get("foulsCommitted", 0)))
+                        e["asistencias"] += int(num(st_map.get("goalAssists", 0)))
+                        e["posesion"] += num(st_map.get("possessionPct", 0))
+                        e["_pj"] += 1
+                    # Goles en contra: el gol del rival
+                    comps = comp.get("competitors", [])
+                    if len(comps) == 2:
+                        for i, c in enumerate(comps):
+                            tname = c.get("team", {}).get("displayName", "")
+                            team = ESPN_TEAM_NAME_MAP.get(tname, tname)
+                            rival = comps[1-i]
+                            rs = {s.get("name"): s.get("displayValue", "0") for s in rival.get("statistics", [])}
+                            try: gc = int(float(rs.get("totalGoals", 0)))
+                            except: gc = 0
+                            if team in equipos_dict:
+                                equipos_dict[team]["gc"] += gc
+    except Exception as e:
+        print(f"Error ESPN team stats: {e}")
+    # Promediar posesión y limpiar campo interno
+    equipos = []
+    for e in equipos_dict.values():
+        pj = e.pop("_pj", 1) or 1
+        e["posesion"] = round(e["posesion"] / pj, 1)
+        equipos.append(e)
+    equipos = sorted(equipos, key=lambda e: (-(e["gf"] or 0), e["gc"] or 0))
 
     goals = goals_marca if goals_marca else goals_of
 
@@ -930,9 +968,8 @@ def stored_scores():
 
 @app.route("/debug_equipos")
 def debug_equipos():
-    """Ver datos crudos del endpoint de equipos de Marca"""
-    raw = fetch_marca_team_rank("passes")
-    return jsonify({"count": len(raw), "first": raw[0] if raw else None, "sample": raw[:3]})
+    """Ver estadística de equipos desde ESPN"""
+    return jsonify({"info": "Estadística de equipos ahora viene de ESPN scoreboard en /stats"})
 
 @app.route("/debug_ids")
 def debug_ids():
