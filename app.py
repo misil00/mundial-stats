@@ -101,6 +101,10 @@ def fetch_espn_scores():
             away_name = ESPN_TEAM_NAME_MAP.get(away.get("team",{}).get("displayName",""), away.get("team",{}).get("displayName",""))
             home_score = home.get("score","0")
             away_score = away.get("score","0")
+            def stat_map(c):
+                return {s.get("name"): s.get("displayValue","0") for s in c.get("statistics",[])}
+            hs = stat_map(home)
+            as_ = stat_map(away)
             scores.append({
                 "home": home_name,
                 "away": away_name,
@@ -111,7 +115,21 @@ def fetch_espn_scores():
                 "statusDesc": status_desc,
                 "clock": display_clock,
                 "period": period,
-                "eventId": ev.get("id","")
+                "eventId": ev.get("id",""),
+                "homeStats": {
+                    "posesion": hs.get("possessionPct","0"),
+                    "tiros": hs.get("totalShots","0"),
+                    "tirosArco": hs.get("shotsOnTarget","0"),
+                    "corners": hs.get("wonCorners","0"),
+                    "faltas": hs.get("foulsCommitted","0")
+                },
+                "awayStats": {
+                    "posesion": as_.get("possessionPct","0"),
+                    "tiros": as_.get("totalShots","0"),
+                    "tirosArco": as_.get("shotsOnTarget","0"),
+                    "corners": as_.get("wonCorners","0"),
+                    "faltas": as_.get("foulsCommitted","0")
+                }
             })
         return scores
     except Exception as e:
