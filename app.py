@@ -91,7 +91,7 @@ def fetch_espn_scores():
             display_clock = comp.get("status", {}).get("displayClock", "")
             period = comp.get("status", {}).get("period", 0)
             # Solo partidos en juego o terminados
-            if status not in ["STATUS_IN_PROGRESS", "STATUS_FINAL", "STATUS_HALFTIME"]:
+            if status not in ["STATUS_IN_PROGRESS", "STATUS_FINAL", "STATUS_HALFTIME", "STATUS_FIRST_HALF", "STATUS_SECOND_HALF", "STATUS_FULL_TIME"]:
                 continue
             competitors = comp.get("competitors", [])
             if len(competitors) < 2: continue
@@ -256,7 +256,7 @@ def stats():
                 for comp in ev.get("competitions", []):
                     st = comp.get("status", {}).get("type", {}).get("name", "")
                     # Solo partidos en juego o terminados (tienen estadística)
-                    if st not in ["STATUS_IN_PROGRESS", "STATUS_HALFTIME", "STATUS_FINAL", "STATUS_FULL_TIME"]:
+                    if st not in ["STATUS_IN_PROGRESS", "STATUS_HALFTIME", "STATUS_FINAL", "STATUS_FULL_TIME", "STATUS_FIRST_HALF", "STATUS_SECOND_HALF"]:
                         continue
                     for c in comp.get("competitors", []):
                         tname = c.get("team", {}).get("displayName", "")
