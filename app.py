@@ -50,6 +50,20 @@ def fetch_marca_rank(sort_by):
         print(f"Error Marca {sort_by}: {e}")
         return []
 
+MARCA_TEAM_BASE = "https://api.unidadeditorial.es/sports/v1/team-total-rank/sport/01/tournament/0117/season/2025"
+
+def fetch_marca_team_rank(sort_by):
+    """Fetch TEAM ranking from Marca - one row per team"""
+    try:
+        url = f"{MARCA_TEAM_BASE}/sort/{sort_by}?site=2&mn=50"
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        return data.get("data", {}).get("rank", [])
+    except Exception as e:
+        print(f"Error Marca team {sort_by}: {e}")
+        return []
+
 ESPN_TEAM_NAME_MAP = {
     "Brazil":"Brasil","Morocco":"Marruecos","Switzerland":"Suiza","Qatar":"Qatar",
     "Scotland":"Escocia","Haiti":"Haití","United States":"Estados Unidos",
@@ -214,21 +228,23 @@ def stats():
         if name and gc == 0 and p.get("games", 0) > 0:
             clean.append({"jugador": name, "seleccion": team, "total": p.get("games", 1)})
 
-    # Equipos desde Marca
-    equipos_rank = fetch_marca_rank("passes")
-    equipos = []
+    # Equipos desde Marca - endpoint de EQUIPOS (una fila por equipo)
+    equipos_rank = fetch_marca_team_rank("passes")
+    equipos_dict = {}
     for p in equipos_rank:
         team = es(p.get("teamName", ""))
-        if team:
-            equipos.append({
-                "seleccion": team,
-                "gf": p.get("goalsFor", p.get("goals", 0)),
-                "gc": p.get("goalsAgainst", p.get("goalsConceded", 0)),
-                "disparos": p.get("shots", p.get("totalShots", 0)),
-                "faltas": p.get("foulsCommitted", p.get("fouls", 0)),
-                "ta": p.get("yellowCards", 0),
-                "tr": p.get("redCards", 0)
-            })
+        if not team or team in equipos_dict:
+            continue
+        equipos_dict[team] = {
+            "seleccion": team,
+            "gf": p.get("goalsFor", p.get("goals", 0)),
+            "gc": p.get("goalsAgainst", p.get("goalsConceded", 0)),
+            "disparos": p.get("shots", p.get("totalShots", 0)),
+            "faltas": p.get("foulsCommitted", p.get("fouls", 0)),
+            "ta": p.get("yellowCards", 0),
+            "tr": p.get("redCards", 0)
+        }
+    equipos = sorted(equipos_dict.values(), key=lambda e: (-(e["gf"] or 0), e["gc"] or 0))
 
     goals = goals_marca if goals_marca else goals_of
 
@@ -912,6 +928,12 @@ def stored_scores():
     resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
 
+@app.route("/debug_equipos")
+def debug_equipos():
+    """Ver datos crudos del endpoint de equipos de Marca"""
+    raw = fetch_marca_team_rank("passes")
+    return jsonify({"count": len(raw), "first": raw[0] if raw else None, "sample": raw[:3]})
+
 @app.route("/debug_ids")
 def debug_ids():
     """Ver el mapa de IDs reales de ESPN"""
@@ -919,13 +941,27 @@ def debug_ids():
         build_espn_id_map()
     return jsonify({"count": len(_espn_id_map), "ids": _espn_id_map})
 
+@app.route("/all_squads")
+def all_squads():
+    """Devuelve TODOS los planteles de una vez - URL fija sin acentos"""
+    result = {}
+    for team_name in ESPN_TEAM_IDS.keys():
+        data = fetch_espn_squad(team_name)
+        if data and data.get("players"):
+            result[team_name] = data
+    return jsonify(result)
+
 @app.route("/squad/<team_name>")
 def squad(team_name):
     """Return official squad for a team from ESPN"""
     result = fetch_espn_squad(team_name)
     if result is None:
-        return jsonify({"error": "Team not found or no data", "team": team_name}), 404
-    return jsonify({"team": team_name, "players": result["players"], "coach": result["coach"]})
+        resp = jsonify({"error": "Team not found or no data", "team": team_name})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp, 404
+    resp = jsonify({"team": team_name, "players": result["players"], "coach": result["coach"]})
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
 
 @app.route("/stored_lineups")
 def stored_lineups():
