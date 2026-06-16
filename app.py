@@ -226,12 +226,12 @@ def stats():
         if name and gc == 0 and p.get("games", 0) > 0:
             clean.append({"jugador": name, "seleccion": team, "total": p.get("games", 1)})
 
-    # Estadística por equipo desde ESPN (acumulado de todos los partidos del scoreboard)
+    # Estadística por equipo desde ESPN (acumulado de TODO el Mundial hasta la fecha)
     equipos_dict = {}
     try:
         sb = requests.get(
-            "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard",
-            timeout=10
+            "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260611-20260719&limit=950",
+            timeout=15
         )
         if sb.ok:
             for ev in sb.json().get("events", []):
