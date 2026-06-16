@@ -320,10 +320,9 @@ def stats():
                 "eventId": eid
             })
 
-    # Agregar scores en vivo que no estén ya guardados
+    # Combinar: el live (con estadística y estado detallado) tiene prioridad sobre el cache
     live_keys = {f"{s['home']}_{s['away']}" for s in scores}
-    stored_keys = {f"{s['home']}_{s['away']}" for s in stored_scores_list}
-    all_scores = stored_scores_list + [s for s in scores if f"{s['home']}_{s['away']}" not in stored_keys]
+    all_scores = scores + [s for s in stored_scores_list if f"{s['home']}_{s['away']}" not in live_keys]
 
     # Auto-guardar scores en vivo que sean FINAL
     changed = False
