@@ -90,8 +90,7 @@ def fetch_espn_scores():
             status_desc = status_type.get("description", "")
             display_clock = comp.get("status", {}).get("displayClock", "")
             period = comp.get("status", {}).get("period", 0)
-            # Solo partidos en juego o terminados
-             competitors = comp.get("competitors", [])
+            competitors = comp.get("competitors", [])
             if len(competitors) < 2: continue
             home = next((c for c in competitors if c.get("homeAway")=="home"), competitors[0])
             away = next((c for c in competitors if c.get("homeAway")=="away"), competitors[1])
