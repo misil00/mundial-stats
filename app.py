@@ -115,7 +115,8 @@ def fetch_espn_event_full(event_id):
                 team_name = es(c.get("team", {}).get("displayName", ""))
                 teams.append({
                     "team": team_name, "score": c.get("score", ""),
-                    "homeAway": c.get("homeAway", ""), "winner": c.get("winner", False)
+                    "homeAway": c.get("homeAway", ""), "winner": c.get("winner", False),
+                    "shootoutScore": c.get("shootoutScore")
                 })
             result["teams_score"] = teams
         rosters = d.get("rosters", [])
@@ -147,9 +148,10 @@ def fetch_espn_event_full(event_id):
         return None
 
 # Statuses que tienen datos reales (en juego o terminados)
+# STATUS_FINAL_PEN = partido terminado por penales (lo manda ESPN cuando hay shootout)
 ACTIVE_STATUSES = ["STATUS_IN_PROGRESS","STATUS_HALFTIME","STATUS_FIRST_HALF",
-                   "STATUS_SECOND_HALF","STATUS_FINAL","STATUS_FULL_TIME"]
-FINAL_STATUSES  = ["STATUS_FINAL","STATUS_FULL_TIME"]
+                   "STATUS_SECOND_HALF","STATUS_FINAL","STATUS_FULL_TIME","STATUS_FINAL_PEN"]
+FINAL_STATUSES  = ["STATUS_FINAL","STATUS_FULL_TIME","STATUS_FINAL_PEN"]
 
 def capture_all_events():
     """Captura lineups de partidos en curso Y terminados"""
@@ -171,7 +173,7 @@ def capture_all_events():
                 data["scores"][eid][t["homeAway"]] = {
                     "team": t["team"], "score": t["score"],
                     "winner": t["winner"], "status": ev.get("status",""),
-                    "date": ev.get("date","")
+                    "date": ev.get("date",""), "shootoutScore": t.get("shootoutScore")
                 }
             captured += 1
     set_cache(data)
@@ -203,6 +205,7 @@ def fetch_espn_scores():
             away_name = es(away.get("team",{}).get("displayName",""))
 
             # FIX: Solo mandar score si el partido realmente empezó o terminó
+            # (incluye STATUS_FINAL_PEN para partidos que se definen en penales)
             if status in ACTIVE_STATUSES:
                 home_score_raw = home.get("score","0")
                 away_score_raw = away.get("score","0")
@@ -217,9 +220,15 @@ def fetch_espn_scores():
                 return {s.get("name"):s.get("displayValue","0") for s in c.get("statistics",[])}
             hs = stat_map(home)
             as_ = stat_map(away)
+
+            # Marcador de penales (si lo hubo) — ESPN lo manda como shootoutScore
+            home_pen = home.get("shootoutScore")
+            away_pen = away.get("shootoutScore")
+
             scores.append({
                 "home": home_name, "away": away_name,
                 "homeScore": h_score, "awayScore": a_score,
+                "homePenalty": home_pen, "awayPenalty": away_pen,
                 "status": status, "statusDetail": status_detail,
                 "clock": display_clock, "period": period,
                 "eventId": ev.get("id",""), "startTime": ev.get("date",""),
@@ -350,7 +359,7 @@ def stats():
                         data["scores"][eid][t["homeAway"]] = {
                             "team":t["team"],"score":t["score"],
                             "winner":t["winner"],"status":edata.get("status",""),
-                            "date":edata.get("date","")
+                            "date":edata.get("date",""), "shootoutScore": t.get("shootoutScore")
                         }
                     set_cache(data)
 
@@ -488,7 +497,8 @@ def capture_event(event_id):
         for t in ev["teams_score"]:
             data["scores"][event_id][t["homeAway"]]={
                 "team":t["team"],"score":t["score"],
-                "winner":t["winner"],"status":ev.get("status",""),"date":ev.get("date","")
+                "winner":t["winner"],"status":ev.get("status",""),"date":ev.get("date",""),
+                "shootoutScore": t.get("shootoutScore")
             }
     set_cache(data)
     resp=jsonify({"ok":True,"event_id":event_id,"status":ev.get("status",""),
