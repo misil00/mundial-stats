@@ -110,6 +110,10 @@ def fetch_espn_event_full(event_id):
             status = comp.get("status", {}).get("type", {}).get("name", "")
             result["status"] = status
             result["date"] = comp.get("date", "")
+            # Venue
+            venue_data = comp.get("venue", {})
+            result["venue"] = venue_data.get("fullName", "") or venue_data.get("shortName", "")
+            result["city"] = venue_data.get("address", {}).get("city", "")
             teams = []
             for c in comp.get("competitors", []):
                 team_name = es(c.get("team", {}).get("displayName", ""))
@@ -147,25 +151,20 @@ def fetch_espn_event_full(event_id):
         print(f"Error fetching event {event_id}: {e}")
         return None
 
-# Statuses que tienen datos reales (en juego o terminados)
-# STATUS_FINAL_PEN = partido terminado por penales (lo manda ESPN cuando hay shootout)
 ACTIVE_STATUSES = ["STATUS_IN_PROGRESS","STATUS_HALFTIME","STATUS_FIRST_HALF",
                    "STATUS_SECOND_HALF","STATUS_FINAL","STATUS_FULL_TIME","STATUS_FINAL_PEN"]
 FINAL_STATUSES  = ["STATUS_FINAL","STATUS_FULL_TIME","STATUS_FINAL_PEN"]
 
 def capture_all_events():
-    """Captura lineups de partidos en curso Y terminados"""
     data = get_cache() if _cache else {"scores": {}, "lineups": {}}
     ids = get_all_event_ids()
     captured = 0
     for eid in ids:
         existing = data["lineups"].get(eid, {})
-        # Re-capturar si: no existe, o si está en curso (puede tener alineaciones ya)
         if existing.get("status") in FINAL_STATUSES:
-            continue  # Terminado y guardado = no tocar
+            continue
         ev = fetch_espn_event_full(eid)
         if not ev or not ev.get("teams_score"): continue
-        # Guardar si está en curso o terminado (tiene datos reales)
         if ev.get("status") in ACTIVE_STATUSES or ev.get("rosters"):
             data["lineups"][eid] = ev
             data["scores"][eid] = {}
@@ -197,6 +196,12 @@ def fetch_espn_scores():
             status_detail = status_type.get("shortDetail", status_type.get("detail", ""))
             display_clock = comp.get("status", {}).get("displayClock", "")
             period = comp.get("status", {}).get("period", 0)
+            
+            # Venue desde ESPN
+            venue_data = comp.get("venue", {})
+            venue_name = venue_data.get("fullName", "") or venue_data.get("shortName", "")
+            venue_city = venue_data.get("address", {}).get("city", "")
+            
             competitors = comp.get("competitors", [])
             if len(competitors) < 2: continue
             home = next((c for c in competitors if c.get("homeAway")=="home"), competitors[0])
@@ -204,15 +209,12 @@ def fetch_espn_scores():
             home_name = es(home.get("team",{}).get("displayName",""))
             away_name = es(away.get("team",{}).get("displayName",""))
 
-            # FIX: Solo mandar score si el partido realmente empezó o terminó
-            # (incluye STATUS_FINAL_PEN para partidos que se definen en penales)
             if status in ACTIVE_STATUSES:
                 home_score_raw = home.get("score","0")
                 away_score_raw = away.get("score","0")
                 h_score = int(home_score_raw) if str(home_score_raw).isdigit() else 0
                 a_score = int(away_score_raw) if str(away_score_raw).isdigit() else 0
             else:
-                # Partido no empezado: score null para que la app no lo guarde
                 h_score = None
                 a_score = None
 
@@ -221,7 +223,6 @@ def fetch_espn_scores():
             hs = stat_map(home)
             as_ = stat_map(away)
 
-            # Marcador de penales (si lo hubo) — ESPN lo manda como shootoutScore
             home_pen = home.get("shootoutScore")
             away_pen = away.get("shootoutScore")
 
@@ -232,6 +233,7 @@ def fetch_espn_scores():
                 "status": status, "statusDetail": status_detail,
                 "clock": display_clock, "period": period,
                 "eventId": ev.get("id",""), "startTime": ev.get("date",""),
+                "venue": venue_name, "city": venue_city,
                 "homeStats": {
                     "posesion": hs.get("possessionPct","0"),
                     "tiros": hs.get("totalShots","0"),
@@ -343,13 +345,11 @@ def stats():
     scores = fetch_espn_scores()
     data = get_cache()
 
-    # Auto-capturar partidos activos (en curso o terminados) no guardados aún
     for ev in scores:
         if ev.get("status") in ACTIVE_STATUSES:
             eid = ev.get("eventId")
             if not eid: continue
             existing = data["lineups"].get(eid,{})
-            # Re-capturar si no existe o si estaba en curso (puede tener rosters ahora)
             if not existing or existing.get("status") not in FINAL_STATUSES:
                 edata = fetch_espn_event_full(eid)
                 if edata and (edata.get("rosters") or edata.get("teams_score")):
